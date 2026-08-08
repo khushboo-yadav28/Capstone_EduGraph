@@ -1,19 +1,25 @@
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app.core.config import GEMINI_API_KEY
+from app.core.config import (
+    GEMINI_API_KEY,
+    GEMINI_PRIMARY_MODEL,
+    GEMINI_INGESTION_TEMPERATURE,
+    GEMINI_INGESTION_MAX_TOKENS,
+)
 from app.models.quiz import DifficultyLevel
 from app.utils.graph_layout import calculate_dag_layout
 
 logger = logging.getLogger(__name__)
 
 # Initialize Google GenAI Client
-client = genai.Client(GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ==========================================
@@ -55,17 +61,17 @@ class GeminiNodeSchema(BaseModel):
     )
     youtube_url: Optional[str] = Field(
         None, 
-        description="Relevant educational YouTube video URL for supplementary visual learning."
+        description="Strictly null unless an explicit YouTube video URL is written directly inside the uploaded PDF document."
     )
     youtube_timestamp_seconds: Optional[int] = Field(
         None, 
-        description="Timestamp offset in seconds for YouTube video start."
+        description="Strictly null unless an explicit YouTube video timestamp is present in the source PDF."
     )
     quizzes: List[GeminiQuizSchema] = Field(
         ..., 
-        min_items=20, 
-        max_items=20, 
-        description="EXACTLY 20 high-quality multiple choice questions testing this specific concept."
+        min_items=5, 
+        max_items=5, 
+        description="EXACTLY 5 high-quality multiple choice questions testing this specific concept."
     )
 
 
@@ -96,10 +102,57 @@ def extract_course_graph_from_pdf(
     mime_type: str = "application/pdf"
 ) -> Dict[str, Any]:
     """
-    Ingests PDF bytes, sends them to Gemini 3.5 Flash for complete Concept Knowledge Graph extraction,
+    Ingests PDF bytes, sends them to Gemini for complete Concept Knowledge Graph extraction,
     generates 20 quiz questions per node, calculates DAG coordinates, and returns DB-ready payload.
     """
+
     prompt = """
+    You are an expert Curriculum Engineer and Instructional Designer.
+    Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
+
+    CRITICAL INSTRUCTIONS:
+    1. TOPOLOGY & KNOWLEDGE GRAPH:
+       - Extract the top 4 primary learning concepts as ordered nodes with unique keys ('node_1', 'node_2', 'node_3', 'node_4').
+       - Node keys MUST strictly follow lowercase string format ('node_1', 'node_2').
+       - Create directed edges (source_node_key -> target_node_key) using exact node keys to define prerequisite learning flow.
+       - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
+
+    2. NODE QUANTITY & GRANULARITY (TESTING BUDGET):
+       - Extract EXACTLY 4 major concept nodes from the PDF material.
+       - Group closely related sub-topics into a single comprehensive node rather than creating micro-nodes.
+
+    3. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
+       - Target Depth Level: University / Rigorous Academic standard.
+       - Word Count: Each node summary should be comprehensive (roughly 250 to 450 words).
+       - Formatting: Use Markdown with a hybrid structure:
+         * A 2-3 sentence overview introducing the core concept.
+         * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
+         * A short practical example or real-world use-case illustrating the concept in action.
+       - Contextual Continuity & Cross-Referencing:
+         * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
+         * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
+       - Augmentation & Enrichment:
+         * Include source PDF page references (e.g., "Pages 12-15").
+         * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
+         * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
+         * Do NOT introduce completely unrelated subtopics.
+
+    4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
+       - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
+       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
+
+    5. QUESTION BANK (FAST TESTING MODE):
+       - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
+       - Each question MUST have exactly 4 options.
+       - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
+       - Vary difficulty across EASY, MEDIUM, and HARD.
+       - Provide thorough explanations for every answer.
+    """
+
+
+
+
+    """
     You are an expert Curriculum Engineer and Instructional Designer.
     Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
 
@@ -109,24 +162,49 @@ def extract_course_graph_from_pdf(
        - Create directed edges (source_node_key -> target_node_key) indicating strict prerequisite learning order.
        - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
 
-    2. NODE CONTENT & AUGMENTATION:
-       - Provide a comprehensive, detailed study note (summary) for each node.
-       - Include source PDF page references (e.g. "Pages 12-15").
-       - IF the uploaded PDF material is incomplete, ambiguous, or lacks sufficient detail on a topic, ENRICH and AUGMENT the summary using your extensive foundational domain knowledge to ensure complete learning coverage.
+    2. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
+       - Target Depth Level: University / Rigorous Academic standard.
+       - Word Count: Each node summary MUST be between 250 and 450 words.
+       - Formatting: Use Markdown with a hybrid structure:
+         * A 2-3 sentence overview introducing the core concept.
+         * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
+         * A short practical example or real-world use-case illustrating the concept in action.
+       - Contextual Continuity & Cross-Referencing:
+         * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
+         * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
+       - Augmentation & Enrichment:
+         * Include source PDF page references (e.g., "Pages 12-15").
+         * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
+         * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
+         * Do NOT introduce completely unrelated subtopics.
 
-    3. QUESTION BANK (CRITICAL):
-       - For EVERY concept node, generate EXACTLY 20 multiple choice questions.
+    3. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
+       - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
+       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
+
+    4. QUESTION BANK (CRITICAL):
+       - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
        - Each question MUST have exactly 4 options.
        - `correct_option_index` must be an integer from 0 to 3 matching the correct string in `options`.
        - Vary difficulty across EASY, MEDIUM, and HARD.
        - Provide thorough explanations for every answer.
+       
+    5. NODE GRANULARITY & QUANTITY (CRITICAL):
+       - Analyze the scope and density of the uploaded PDF material.
+       - For short documents (1-5 pages): Extract 2 to 4 major concept nodes.
+       - For medium documents (6-20 pages): Extract 4 to 8 major concept nodes.
+       - For long documents (20+ pages): Extract 8 to 12 major concept nodes.
+       - Do NOT create excessive micro-nodes for minor sub-topics. Group closely related sub-topics into a single comprehensive node.
     """
 
     try:
-        logger.info("Sending PDF content to Gemini for Knowledge Graph extraction...")
+        # 1. Start timer
+        start_time = time.perf_counter()
+
+        print("Sending PDF content to Gemini for Knowledge Graph extraction...")
         
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_PRIMARY_MODEL,
             contents=[
                 types.Part.from_bytes(data=pdf_bytes, mime_type=mime_type),
                 prompt
@@ -134,10 +212,26 @@ def extract_course_graph_from_pdf(
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=CourseGraphExtractionSchema,
-                temperature=0.2
+                temperature=GEMINI_INGESTION_TEMPERATURE,
+                max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
+                thinking_config=types.ThinkingConfig(thinking_budget=0,include_thoughts=False)
             )
         )
 
+        # 2. Stop timer
+        elapsed_time_seconds = round(time.perf_counter() - start_time, 2)
+
+        # 3. Extract Token Usage Stats
+        usage = response.usage_metadata
+        prompt_tokens = usage.prompt_token_count if usage else 0
+        completion_tokens = usage.candidates_token_count if usage else 0
+        total_tokens = usage.total_token_count if usage else 0
+
+        print(
+            f"Gemini Extraction Completed in {elapsed_time_seconds}s | "
+            f"Tokens: Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}"
+        )
+        
         raw_data = json.loads(response.text)
         
         # --- Map Node Keys for Layout Utility ---

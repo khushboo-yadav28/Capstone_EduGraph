@@ -60,3 +60,42 @@ class StudentProgressResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class QuizPublicResponse(BaseModel):
+    """Public version of Quiz schema for students - hides correct answer and explanation."""
+    id: int
+    node_id: UUID
+    question_text: str
+    options: List[str]
+    difficulty: DifficultyLevel
+
+    class Config:
+        from_attributes = True
+
+
+class SingleAnswerSubmit(BaseModel):
+    quiz_id: int
+    selected_option_index: int = Field(..., ge=0, le=5)
+
+
+class BatchQuizSubmitRequest(BaseModel):
+    answers: List[SingleAnswerSubmit] = Field(..., min_items=1)
+
+
+class QuestionFeedback(BaseModel):
+    quiz_id: int
+    question_text: str
+    selected_option_index: int
+    correct_option_index: int
+    is_correct: bool
+    explanation: Optional[str] = None
+
+
+class BatchQuizEvaluationResponse(BaseModel):
+    attempt_id: int
+    score_percentage: float
+    total_questions: int
+    correct_answers_count: int
+    is_passed: bool
+    unlocked_next_node_keys: List[str] = []
+    feedback: List[QuestionFeedback]

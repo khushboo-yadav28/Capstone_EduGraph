@@ -18,19 +18,19 @@ DEFAULT_USERS = [
     {
         "full_name": "System Admin",
         "email": "admin@edugraph.com",
-        "password": "AdminPassword123!",
+        "password": "admin123",
         "role": UserRole.ADMIN,
     },
     {
         "full_name": "Dr. Sarah Connor",
-        "email": "instructor@edugraph.com",
-        "password": "InstructorPassword123!",
+        "email": "instructor@gmail.com",
+        "password": "instructor123",
         "role": UserRole.INSTRUCTOR,
     },
     {
         "full_name": "Alex Mercer",
-        "email": "student@edugraph.com",
-        "password": "StudentPassword123!",
+        "email": "student@gmail.com",
+        "password": "student123",
         "role": UserRole.STUDENT,
     },
 ]
@@ -93,3 +93,20 @@ def seed_all_initial_data(db: Session) -> dict:
         "categories_count": len(categories),
         "users_count": len(users)
     }
+
+if __name__ == "__main__":
+    import logging
+    from app.database import SessionLocal
+
+    # Ensure log output is visible in console
+    logging.basicConfig(level=logging.INFO)
+
+    db = SessionLocal()
+    try:
+        results = seed_all_initial_data(db)
+        print("Seeding successful:", results)
+    except Exception as e:
+        print("Error seeding database:", e)
+        db.rollback()
+    finally:
+        db.close()

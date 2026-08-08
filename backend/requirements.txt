@@ -22,7 +22,7 @@ youtube-transcript-api
 networkx
 
 # Security & Utilities
-passlib
+pwdlib[bcrypt]
 python-jose
 httpx
 jose
