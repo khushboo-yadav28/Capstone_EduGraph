@@ -1,0 +1,28 @@
+# FastAPI Core & Server
+fastapi
+uvicorn
+python-multipart
+
+# Database & ORM
+sqlalchemy
+psycopg2-binary
+pgvector
+alembic
+
+# Data Validation & Settings
+pydantic
+pydantic-settings
+python-dotenv
+
+# AI & Processing Libraries
+google-genai
+google-generativeai
+PyMuPDF
+youtube-transcript-api
+networkx
+
+# Security & Utilities
+passlib
+python-jose
+httpx
+jose

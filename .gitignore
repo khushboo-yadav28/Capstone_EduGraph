@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+*.env
+.env.*
+
+# Python / Virtual Environments
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Uploaded Files & Local Buffers
+uploads/
+*.pdf
+*.pptx
+
+# Node / Frontend
+node_modules/
+.next/
+build/
+dist/
+
+# IDE / System files
+.vscode/
+.idea/
+.DS_Store
