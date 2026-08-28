@@ -20,13 +20,25 @@ export default function RegisterPage() {
     setError('');
 
     try {
-      // Connects to backend registration endpoint if available
-      await api.post('/auth/register', { name, email, password, role });
+      await api.post('/auth/register', {full_name: name, email:email, password:password, role: role.toUpperCase() });
       router.push('/login');
+    // } catch (err: any) {
+    //   setError(err?.response?.data?.detail || 'Registration failed. Please try again.');
+    // } 
     } catch (err: any) {
-      // Fallback demo redirect for examiner presentation
-      router.push('/login');
-    } finally {
+      const detail = err?.response?.data?.detail;
+
+      if (typeof detail === 'string') {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        // Extracts FastAPI/Pydantic validation messages and joins them
+        const messages = detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+        setError(messages);
+      } else {
+        setError('Registration failed. Please try again.');
+      }
+    }
+    finally {
       setLoading(false);
     }
   };
@@ -35,7 +47,6 @@ export default function RegisterPage() {
     <div className="flex min-h-screen w-full items-center justify-center bg-[#f8fafc] p-6 text-slate-800">
       <div className="w-full max-w-md bg-white border border-slate-200/80 rounded-2xl shadow-sm p-8 space-y-6">
         
-        {/* Header Logo */}
         <div className="flex flex-col items-center space-y-2 text-center">
           <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold shadow-sm">
             <Network size={22} />
@@ -44,7 +55,7 @@ export default function RegisterPage() {
           <p className="text-xs text-slate-500">Join the knowledge graph learning ecosystem</p>
         </div>
 
-        {/* Role Selector Tabs */}
+        {/* Role Selector */}
         <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
           {(['student', 'instructor'] as const).map((r) => (
             <button

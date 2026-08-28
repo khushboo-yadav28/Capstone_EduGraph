@@ -4,6 +4,13 @@ from datetime import datetime
 from uuid import UUID
 from app.models.course import EnrollmentStatus
 
+class CourseMiniResponse(BaseModel):
+    id: UUID
+    title: str
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 # --- Badge Schemas ---
 class BadgeResponse(BaseModel):
@@ -35,6 +42,7 @@ class UserCourseEnrollmentResponse(BaseModel):
     enrolled_at: datetime
     completed_at: Optional[datetime] = None
     badge: Optional[BadgeResponse] = None
+    course: Optional[CourseMiniResponse] = None
 
     class Config:
         from_attributes = True

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { GraduationCap, BookOpenCheck, ShieldAlert, ArrowRight, Network } from 'lucide-react';
+import { Network, ArrowRight, ShieldCheck, Zap, BookOpen } from 'lucide-react';
 
 export default function LandingPage() {
   return (
@@ -16,89 +16,79 @@ export default function LandingPage() {
             AI Knowledge Graph & Adaptive Courseware
           </span>
         </div>
-        <div className="text-xs text-slate-500 font-medium">
-          iMSCIT Capstone Project[cite: 1]
+        <div className="flex items-center gap-3">
+          <Link
+            href="/login"
+            className="text-xs font-semibold text-slate-700 hover:text-slate-900 px-3 py-2 rounded-lg transition"
+          >
+            Sign In
+          </Link>
+          <Link
+            href="/register"
+            className="text-xs font-semibold bg-slate-900 text-white px-4 py-2 rounded-xl hover:bg-slate-800 transition shadow-sm"
+          >
+            Get Started
+          </Link>
         </div>
       </header>
 
       {/* Hero Section */}
-      <main className="flex-1 flex flex-col items-center justify-center p-8 text-center max-w-5xl mx-auto space-y-12">
+      <main className="flex-1 flex flex-col items-center justify-center p-8 text-center max-w-4xl mx-auto space-y-8">
         <div className="space-y-4 max-w-2xl">
-          <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-            Transforming Unstructured Course Materials Into Interactive Visual Roadmaps
+          <h2 className="text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
+            Transform Unstructured Coursework into Interactive Concept Maps
           </h2>
           <p className="text-sm text-slate-600 leading-relaxed">
-            Welcome to EduGraph. Eliminate cognitive overload and instructional blindness[cite: 1] through automated vector-based extraction, dynamic 2D knowledge maps[cite: 1], and real-time semantic search (RAG)[cite: 1].
+            Eliminate cognitive overload with automated vector extraction, 2D Knowledge Graph nodes, and context-aware RAG AI study assistants.
           </p>
         </div>
 
-        {/* Role Selection Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full text-left">
-          {/* Student Card */}
-          <Link 
-            href="/student/course/1" 
-            className="group p-6 bg-white border rounded-2xl shadow-sm hover:shadow-md hover:border-emerald-500 transition space-y-4 flex flex-col justify-between"
+        {/* Dynamic Launch Action */}
+        <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
+          <Link
+            href="/login"
+            className="w-full sm:w-auto px-8 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center justify-center gap-2 group"
           >
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
-                <GraduationCap size={20} />
-              </div>
-              <h3 className="text-base font-bold text-slate-800">Student Explorer</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Navigate personalized 2D concept graphs, explore targeted RAG study sidebars, and pass dynamic mini-quizzes to unlock pathways[cite: 1].
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600 group-hover:translate-x-1 transition">
-              <span>Launch Student View</span>
-              <ArrowRight size={14} />
-            </div>
+            <span>Access Platform</span>
+            <ArrowRight size={16} className="group-hover:translate-x-1 transition" />
           </Link>
+          <Link
+            href="/register"
+            className="w-full sm:w-auto px-8 py-3.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-bold rounded-xl shadow-sm transition"
+          >
+            Create Student / Instructor Account
+          </Link>
+        </div>
 
-          {/* Instructor Card */}
-          <Link 
-            href="/instructor" 
-            className="group p-6 bg-white border rounded-2xl shadow-sm hover:shadow-md hover:border-blue-500 transition space-y-4 flex flex-col justify-between"
-          >
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-                <BookOpenCheck size={20} />
-              </div>
-              <h3 className="text-base font-bold text-slate-800">Instructor Orchestrator</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Curate virtual classrooms, upload multi-page PDFs or video URLs, review AI draft layouts, and inspect cohort heatmaps[cite: 1].
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 group-hover:translate-x-1 transition">
-              <span>Launch Instructor Portal</span>
-              <ArrowRight size={14} />
-            </div>
-          </Link>
-
-          {/* Admin Card */}
-          <Link 
-            href="/admin" 
-            className="group p-6 bg-white border rounded-2xl shadow-sm hover:shadow-md hover:border-slate-800 transition space-y-4 flex flex-col justify-between"
-          >
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
-                <ShieldAlert size={20} />
-              </div>
-              <h3 className="text-base font-bold text-slate-800">System Admin</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Supervise system logs, seed global categories, manage active user accounts, and audit platform-wide metrics.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 group-hover:translate-x-1 transition">
-              <span>Launch Admin Console</span>
-              <ArrowRight size={14} />
-            </div>
-          </Link>
+        {/* Feature Highlights */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full text-left pt-12 border-t border-slate-200/60">
+          <div className="p-5 bg-white border rounded-2xl space-y-2 shadow-sm">
+            <Zap className="text-emerald-600" size={20} />
+            <h3 className="text-xs font-bold text-slate-800">Automated DAG Construction</h3>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Upload course syllabus PDFs and generate dynamic dependency graphs automatically.
+            </p>
+          </div>
+          <div className="p-5 bg-white border rounded-2xl space-y-2 shadow-sm">
+            <BookOpen className="text-blue-600" size={20} />
+            <h3 className="text-xs font-bold text-slate-800">Prerequisite Node Unlocking</h3>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Complete quizzes and pass evaluations to unlock downstream knowledge nodes.
+            </p>
+          </div>
+          <div className="p-5 bg-white border rounded-2xl space-y-2 shadow-sm">
+            <ShieldCheck className="text-slate-700" size={20} />
+            <h3 className="text-xs font-bold text-slate-800">Role-Based Gateways</h3>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Dedicated portals for System Admins, Content Instructors, and Active Students.
+            </p>
+          </div>
         </div>
       </main>
 
       {/* Footer */}
       <footer className="h-12 border-t bg-white px-8 flex items-center justify-center text-xs text-slate-400">
-        EduGraph Knowledge Graph System &bull; Built with Next.js 15, Tailwind CSS, and React Flow[cite: 1]
+        EduGraph Knowledge Graph System &bull; Built with Next.js & FastAPI
       </footer>
     </div>
   );

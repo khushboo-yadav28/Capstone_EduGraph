@@ -18,16 +18,17 @@ from app.schemas.quiz import (
     StudentProgressResponse,
 )
 from app.core.security import get_current_user, require_roles
+from app.services.enrollment_service import update_course_progress_and_badge
 
 router = APIRouter(prefix="/quizzes", tags=["Quizzes & Progress"])
 
 PASSING_SCORE_PERCENTAGE = 70.0  # Threshold to complete node and unlock next DAG nodes
-
+DEFAULT_QUIZ_COUNT = 10
 
 @router.get("/node/{node_id}/questions", response_model=List[QuizPublicResponse])
 def get_random_node_quizzes(
     node_id: UUID,
-    count: int = 10,
+    count: int = DEFAULT_QUIZ_COUNT,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.STUDENT, UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
@@ -79,6 +80,18 @@ def submit_node_quiz(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="You must be enrolled in this course to attempt quizzes."
         )
+
+    # Fetch total available quizzes for this node to determine accurate denominator
+    all_node_quizzes = db.query(Quiz).filter(Quiz.node_id == node_id).all()
+    if not all_node_quizzes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No quiz questions configured for this node."
+        )
+
+    # Max questions expected for an evaluation batch (e.g. min of 10 or total DB count)
+    total_expected_questions = min(len(all_node_quizzes), DEFAULT_QUIZ_COUNT)
+
     quiz_ids = [ans.quiz_id for ans in submission.answers]
     quizzes = db.query(Quiz).filter(Quiz.id.in_(quiz_ids), Quiz.node_id == node_id).all()
     quiz_map = {q.id: q for q in quizzes}
@@ -102,11 +115,12 @@ def submit_node_quiz(
                 selected_option_index=ans.selected_option_index,
                 correct_option_index=quiz.correct_option_index,
                 is_correct=is_correct,
-                explanation=quiz.explanation
+                explanation=quiz.explanation or "No explanation provided for this question."
             )
         )
 
-    total_questions = len(submission.answers)
+    # total_questions = len(submission.answers)
+    total_questions = total_expected_questions
     score_pct = round((correct_count / total_questions) * 100.0, 2) if total_questions > 0 else 0.0
     is_passed = score_pct >= PASSING_SCORE_PERCENTAGE
 
@@ -138,9 +152,10 @@ def submit_node_quiz(
 
     unlocked_next_node_keys = []
 
-    if is_passed and not progress.is_completed:
-        progress.is_completed = True
-        progress.completed_at = datetime.now(timezone.utc)
+    if is_passed:
+        if not progress.is_completed:
+            progress.is_completed = True
+            progress.completed_at = datetime.now(timezone.utc)
 
         # 3. DAG Progression Engine: Unlock downstream dependent nodes
         # Find all edges originating from this node's node_key
@@ -200,6 +215,9 @@ def submit_node_quiz(
                 unlocked_next_node_keys.append(target_node.node_key)
 
     db.commit()
+
+    # Recalculate course overall completion percentage
+    update_course_progress_and_badge(db, current_user.id, node.course_id)
 
     return BatchQuizEvaluationResponse(
         attempt_id=attempt.id,

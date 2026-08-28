@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import List
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.user import User, UserRole
@@ -138,9 +138,13 @@ def get_my_enrollments(
     """
     Returns all courses the current user is enrolled in, updated with real-time completion progress.
     """
-    enrollments = db.query(UserCourseEnrollment).filter(
-        UserCourseEnrollment.student_id == current_user.id
-    ).all()
+    # enrollments = db.query(UserCourseEnrollment).filter(
+    #     UserCourseEnrollment.student_id == current_user.id
+    # ).all()
+    enrollments = db.query(UserCourseEnrollment)\
+        .options(joinedload(UserCourseEnrollment.course))\
+        .filter(UserCourseEnrollment.student_id == current_user.id)\
+        .all()
 
     for enrollment in enrollments:
         update_and_calculate_course_progress(db, enrollment)

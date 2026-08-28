@@ -3,7 +3,7 @@ from typing import Dict, List, Set
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.user import User, UserRole
@@ -13,7 +13,7 @@ from app.services.gemini_service import extract_course_graph_from_pdf
 from app.core.security import get_current_user, require_roles
 from app.schemas.node_graph import CourseGraphResponse,GraphNodeResponse,GraphEdgeResponse,NodeProgressStatus
 from app.models.quiz import QuizAttempt, StudentProgress
-from app.models.course import Course, Edge, Node
+from app.models.course import Category, Course, CourseStatus, Edge, Node
 
 router = APIRouter(prefix="/courses", tags=["Courses & Graph"])
 
@@ -33,6 +33,22 @@ def create_category_endpoint(
 def get_categories_endpoint(db: Session = Depends(get_db)):
     """Retrieves all course categories (Public)."""
     return course_service.get_all_categories(db)
+
+@router.get("/admin/stats")
+def get_admin_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Returns dynamic counts for the Admin Dashboard."""
+    total_users = db.query(User).filter(User.is_active == True).count()
+    total_categories = db.query(Category).count() if 'Category' in globals() else 0
+    total_courses = db.query(Course).filter(Course.status == CourseStatus.PUBLISHED).count()
+    
+    return {
+        "total_users": total_users,
+        "total_categories": total_categories,
+        "total_courses": total_courses,
+    }
 
 
 # --- Course Lifecycle Endpoints ---
@@ -231,3 +247,67 @@ def get_course_graph(
         nodes=formatted_nodes,
         edges=formatted_edges
     )
+
+
+@router.get("/instructor/{course_id}/graph")
+def get_instructor_course_graph(
+    course_id: UUID, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Optional: Verify user role and course ownership
+    if current_user.role != UserRole.INSTRUCTOR:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    course = db.query(Course).options(
+        joinedload(Course.nodes).joinedload(Node.quizzes),
+        joinedload(Course.edges)
+    ).filter(Course.id == course_id).first()
+
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Course not found"
+        )
+
+    formatted_nodes = []
+    for n in course.nodes:
+        quizzes_data = [
+            {
+                "id": str(q.id),
+                "question": q.question_text,
+                "options": q.options,
+                "correct_answer": getattr(q, "correct_answer", None),
+                "explanation": getattr(q, "explanation", None)
+            }
+            for q in n.quizzes
+        ]
+
+        formatted_nodes.append({
+            "id": str(n.id),
+            "node_key": n.node_key,
+            "title": n.title,
+            "summary": n.summary,
+            "page_references": n.page_references,
+            "youtube_url": n.youtube_url,
+            "youtube_timestamp_seconds": n.youtube_timestamp_seconds,
+            "position_x": n.position_x,
+            "position_y": n.position_y,
+            "quizzes": quizzes_data
+        })
+
+    return {
+        "course_id": str(course.id),
+        "course_title": course.title,
+        "course_description": course.description,
+        "nodes": formatted_nodes,
+        "edges": [
+            {
+                # "id": e.id,
+                "id": str(e.id) if hasattr(e, "id") else f"edge-{e.source_node_key}-{e.target_node_key}",
+                "source_node_key": e.source_node_key,
+                "target_node_key": e.target_node_key,
+            }
+            for e in course.edges
+        ]
+    }

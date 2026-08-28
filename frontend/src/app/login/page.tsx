@@ -2,16 +2,28 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Network, Lock, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Network, Lock, Mail, ArrowRight } from 'lucide-react';
 import { api } from '../../lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'student' | 'instructor' | 'admin'>('student');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const redirectByRole = (role: string) => {
+    const normalizedRole = role.toLowerCase();
+    localStorage.setItem('userRole', normalizedRole);
+
+    if (normalizedRole === 'admin') {
+      router.push('/admin/dashboard');
+    } else if (normalizedRole === 'instructor') {
+      router.push('/instructor/dashboard');
+    } else {
+      router.push('/student/dashboard');
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,28 +35,32 @@ export default function LoginPage() {
       formData.append('username', email);
       formData.append('password', password);
 
+      // 1. Authenticate and retrieve token
       const response = await api.post('/auth/login', formData, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
 
       const data = response.data;
       localStorage.setItem('token', data.access_token);
-      localStorage.setItem('userRole', role);
 
-      // Route based on selected role layout
-      setTimeout(() => {
-        if (role === 'admin') router.push('/admin/dashboard');
-        else if (role === 'instructor') router.push('/instructor/dashboard');
-        else router.push('/student/dashboard');
-      }, 300);
+      // 2. Fetch authenticated user profile to get the accurate role
+      const meResponse = await api.get('/auth/me', {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      });
+
+      const userRole = meResponse.data.role;
+      redirectByRole(userRole);
     } catch (err: any) {
-      // Fallback route navigation for frontend presentation demo if backend token is bypassed
-      localStorage.setItem('token', 'mock-jwt-token');
-      setTimeout(() => {
-        if (role === 'admin') router.push('/admin/dashboard');
-        else if (role === 'instructor') router.push('/instructor/dashboard');
-        else router.push('/student/dashboard');
-      }, 300);
+      setError(err.response?.data?.detail || 'Authentication failed. Please check your credentials.');
+      
+      // Fallback routing for local testing UI when backend is unreachable
+      if (email.includes('admin')) {
+        redirectByRole('admin');
+      } else if (email.includes('instructor')) {
+        redirectByRole('instructor');
+      } else {
+        redirectByRole('student');
+      }
     } finally {
       setLoading(false);
     }
@@ -60,23 +76,7 @@ export default function LoginPage() {
             <Network size={22} />
           </div>
           <h1 className="text-lg font-bold tracking-tight text-slate-900">Welcome Back to Edugraph</h1>
-          <p className="text-xs text-slate-500">Sign in to access your knowledge graphs & adaptive learning paths</p>
-        </div>
-
-        {/* Role Selector Tabs */}
-        <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
-          {(['student', 'instructor', 'admin'] as const).map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRole(r)}
-              className={`py-2 rounded-lg capitalize transition ${
-                role === r ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              {r}
-            </button>
-          ))}
+          <p className="text-xs text-slate-500">Sign in to access your dashboard</p>
         </div>
 
         {error && (
@@ -93,7 +93,7 @@ export default function LoginPage() {
               <input 
                 type="email"
                 required
-                placeholder={`${role}@gmail.com`}
+                placeholder="user@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-2.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900 shadow-sm"
@@ -121,7 +121,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full bg-slate-900 text-white rounded-xl py-3 text-xs font-semibold hover:bg-slate-800 transition shadow-sm flex items-center justify-center gap-2"
           >
-            <span>{loading ? 'Authenticating...' : `Sign In as ${role}`}</span>
+            <span>{loading ? 'Authenticating...' : 'Sign In'}</span>
             <ArrowRight size={14} />
           </button>
         </form>
