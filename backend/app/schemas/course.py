@@ -27,3 +27,25 @@ class CourseResponse(CourseCreate):
 
     class Config:
         from_attributes = True
+
+# --- NEW Public Detailed Course Schema ---
+class InstructorSummary(BaseModel):
+    id: UUID
+    full_name: str
+    email: str
+
+    class Config:
+        from_attributes = True
+
+class CourseDetailResponse(BaseModel):
+    id: UUID
+    title: str
+    description: Optional[str] = None
+    status: str
+    category: CategoryResponse
+    instructor: InstructorSummary
+    enrolled_students_count: int = 0
+
+    class Config:
+        from_attributes = True
+        

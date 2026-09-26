@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 from fastapi import HTTPException, status
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
-from app.models.course import Course, CourseStatus, Category
+from app.models.course import Course, CourseStatus, Category, UserCourseEnrollment
 from app.models.user import User, UserRole
 from app.models.course import Node, Edge
 from app.models.quiz import Quiz
@@ -85,15 +86,142 @@ def get_course_by_id(db: Session, course_id: UUID) -> Course:
     return course
 
 
-def get_published_courses(db: Session, skip: int = 0, limit: int = 20) -> List[Course]:
-    """Retrieves all public/published courses for student browsing."""
-    return (
-        db.query(Course)
-        .filter(Course.status == CourseStatus.PUBLISHED)
-        .offset(skip)
-        .limit(limit)
-        .all()
+# def get_published_courses(db: Session, skip: int = 0, limit: int = 20) -> List[Course]:
+#     """Retrieves all public/published courses for student browsing."""
+#     return (
+#         db.query(Course)
+#         .filter(Course.status == CourseStatus.PUBLISHED)
+#         .offset(skip)
+#         .limit(limit)
+#         .all()
+#     )
+
+def get_published_courses_with_search(
+    db: Session,
+    search: Optional[str] = None,
+    category_name: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Public Course Cards Listing / Search.
+    Supports search query `q` across:
+    - Course title
+    - Course description
+    - Instructor name
+    - Category name
+    Supports explicit category filtering by Category Name.
+    """
+    # Subquery for student enrollment counts
+    enrollment_counts = (
+        db.query(
+            UserCourseEnrollment.course_id,
+            func.count(UserCourseEnrollment.id).label("enrolled_students_count")
+        )
+        .group_by(UserCourseEnrollment.course_id)
+        .subquery()
     )
+
+    # Base Query
+    query = (
+        db.query(
+            Course,
+            func.coalesce(enrollment_counts.c.enrolled_students_count, 0).label("enrolled_students_count")
+        )
+        .join(Course.category)
+        .join(Course.instructor)
+        .outerjoin(enrollment_counts, Course.id == enrollment_counts.c.course_id)
+        .filter(Course.status == CourseStatus.PUBLISHED)
+    )
+
+    # Filter by Category Name if provided
+    if category_name:
+        query = query.filter(Category.name.ilike(f"%{category_name.strip()}%"))
+
+    # Global search across Title, Description, Instructor Name, and Category Name
+    if search:
+        search_term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Course.title.ilike(search_term),
+                Course.description.ilike(search_term),
+                User.full_name.ilike(search_term),
+                Category.name.ilike(search_term)
+            )
+        )
+
+    # Sort by highest enrolled students first, then newest created
+    query = query.order_by(
+        enrollment_counts.c.enrolled_students_count.desc().nullslast(),
+        Course.created_at.desc()
+    )
+
+    results = query.offset(skip).limit(limit).all()
+
+    formatted_courses = []
+    for course, count in results:
+        formatted_courses.append({
+            "id": course.id,
+            "title": course.title,
+            "description": course.description,
+            "status": course.status,
+            "category": course.category,
+            "instructor": {
+                "id": course.instructor.id,
+                "full_name": course.instructor.full_name,
+                "email": course.instructor.email
+            },
+            "enrolled_students_count": count,
+            "created_at": course.created_at
+        })
+
+    return formatted_courses
+
+
+def get_single_course_public_details(db: Session, course_id: UUID) -> Dict[str, Any]:
+    """
+    Fetches comprehensive details for a single course landing page (Public).
+    Includes total nodes count in the learning graph without exposing quiz answers.
+    """
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.status == CourseStatus.PUBLISHED)
+        .first()
+    )
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Course not found or not published."
+        )
+
+    enrolled_count = (
+        db.query(func.count(UserCourseEnrollment.id))
+        .filter(UserCourseEnrollment.course_id == course_id)
+        .scalar()
+    ) or 0
+
+    total_nodes = (
+        db.query(func.count(Node.id))
+        .filter(Node.course_id == course_id)
+        .scalar()
+    ) or 0
+
+    return {
+        "id": course.id,
+        "title": course.title,
+        "description": course.description,
+        "status": course.status,
+        "category": course.category,
+        "instructor": {
+            "id": course.instructor.id,
+            "full_name": course.instructor.full_name,
+            "email": course.instructor.email
+        },
+        "enrolled_students_count": enrolled_count,
+        "total_nodes_count": total_nodes,
+        "created_at": course.created_at
+    }
 
 
 def publish_course(db: Session, course_id: UUID, current_user: User) -> Course:
@@ -196,3 +324,23 @@ def save_generated_graph_to_course(
     db.commit()
     db.refresh(course)
     return course
+
+def get_instructor_draft_courses(db: Session, current_user: User) -> List[Course]:
+    """Retrieves all draft courses created by the specific logged-in instructor."""
+    if current_user.role != UserRole.INSTRUCTOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only instructors can view draft courses."
+        )
+
+    return (
+        db.query(Course)
+        .options(joinedload(Course.category), joinedload(Course.nodes))
+        .filter(
+            Course.instructor_id == current_user.id,
+            Course.status == CourseStatus.DRAFT
+        )
+        .order_by(Course.created_at.desc())
+        .all()
+    )
+

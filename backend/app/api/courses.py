@@ -1,13 +1,13 @@
 # app/api/v1/endpoints/courses.py
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.course import CourseCreate, CourseResponse, CategoryCreate, CategoryResponse
+from app.schemas.course import CourseCreate, CourseDetailResponse, CourseResponse, CategoryCreate, CategoryResponse
 from app.services import course_service
 from app.services.gemini_service import extract_course_graph_from_pdf
 from app.core.security import get_current_user, require_roles
@@ -97,15 +97,48 @@ async def ingest_pdf_to_course(
     return updated_course
 
 
-@router.get("/published", response_model=List[CourseResponse])
+# @router.get("/published", response_model=List[CourseResponse])
+# def list_published_courses(
+#     skip: int = 0,
+#     limit: int = 20,
+#     db: Session = Depends(get_db)
+# ):
+#     """Retrieves published courses for student discovery (Public)."""
+#     return course_service.get_published_courses(db, skip=skip, limit=limit)
+
+@router.get("/published", response_model=List[CourseDetailResponse])
 def list_published_courses(
-    skip: int = 0,
-    limit: int = 20,
+    q: Optional[str] = Query(None, description="Search keyword for course name, description, instructor, or category"),
+    category: Optional[str] = Query(None, description="Filter specifically by category name (e.g. 'Computer Science')"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    """Retrieves published courses for student discovery (Public)."""
-    return course_service.get_published_courses(db, skip=skip, limit=limit)
+    """
+    Public Endpoint for Course Browsing & Searching.
+    Order results by popularity (enrolled students) and recency.
+    Guest user can search by typing in `q` or selecting a category name in `category`.
+    """
+    return course_service.get_published_courses_with_search(
+        db=db,
+        search=q,
+        category_name=category,
+        skip=skip,
+        limit=limit
+    )
 
+
+@router.get("/details/{course_id}", response_model=CourseDetailResponse)
+def get_public_course_details(
+    course_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Public Course Landing Page Endpoint.
+    When a guest/user clicks a course card, this provides all course meta details
+    (Instructor name, Description, Category, Total enrolled students, Total learning graph topics count).
+    """
+    return course_service.get_single_course_public_details(db, course_id)
 
 @router.get("/{course_id}", response_model=CourseResponse)
 def get_course_details(
@@ -311,3 +344,15 @@ def get_instructor_course_graph(
             for e in course.edges
         ]
     }
+
+
+@router.get("/instructor/drafts", response_model=List[CourseResponse])
+def list_instructor_drafts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.INSTRUCTOR]))
+):
+    """
+    Retrieves all draft courses created by the authenticated instructor.
+    Used for the instructor dashboard where they can review drafts and click 'Publish'.
+    """
+    return course_service.get_instructor_draft_courses(db=db, current_user=current_user)
