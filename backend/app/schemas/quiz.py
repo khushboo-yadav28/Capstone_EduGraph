@@ -7,6 +7,7 @@ from app.models.quiz import DifficultyLevel
 
 # --- Quiz Schemas ---
 class QuizBase(BaseModel):
+    set_number: int = Field(1, ge=1, le=2, example=1)
     question_text: str = Field(..., example="What is the output of type([]) in Python?")
     options: List[str] = Field(
         ..., 
@@ -40,6 +41,7 @@ class QuizAttemptResponse(BaseModel):
     id: int
     student_id: UUID
     node_id: UUID
+    set_number: int
     score_percentage: float = Field(..., example=100.0)
     is_passed: bool = Field(..., example=True)
     attempted_at: datetime
@@ -65,6 +67,7 @@ class QuizPublicResponse(BaseModel):
     """Public version of Quiz schema for students - hides correct answer and explanation."""
     id: int
     node_id: UUID
+    set_number: int
     question_text: str
     options: List[str]
     difficulty: DifficultyLevel
@@ -79,6 +82,7 @@ class SingleAnswerSubmit(BaseModel):
 
 
 class BatchQuizSubmitRequest(BaseModel):
+    set_number: int
     answers: List[SingleAnswerSubmit] = Field(..., min_items=1)
 
 
@@ -93,9 +97,11 @@ class QuestionFeedback(BaseModel):
 
 class BatchQuizEvaluationResponse(BaseModel):
     attempt_id: int
+    set_number: int
     score_percentage: float
     total_questions: int
     correct_answers_count: int
     is_passed: bool
+    node_fully_completed: bool  # True if both set 1 and set 2 are now passed
     unlocked_next_node_keys: List[str] = []
     feedback: List[QuestionFeedback]

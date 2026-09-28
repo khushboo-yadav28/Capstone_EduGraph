@@ -344,3 +344,61 @@ def get_instructor_draft_courses(db: Session, current_user: User) -> List[Course
         .all()
     )
 
+def update_instructor_course_graph(
+    db: Session, 
+    course_id: UUID, 
+    graph_data: dict, 
+    current_user: User
+) -> Course:
+    # 1. Fetch the course, which automatically loads its associated nodes via relationship
+    course = get_course_by_id(db, course_id)
+
+    if course.instructor_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify this course graph."
+        )
+
+    # 2. Update the Course-level details (title/description of the course itself)
+    if graph_data.get("course_title"):
+        course.title = graph_data["course_title"]
+    if graph_data.get("course_description"):
+        course.description = graph_data["course_description"]
+
+    # 3. Update the separate rows in the 'nodes' table
+    # course.nodes gives you access to all Node records tied to this course_id
+    existing_nodes_map = {str(n.id): n for n in course.nodes}
+    existing_keys_map = {n.node_key: n for n in course.nodes}
+
+    for node_data in graph_data.get("nodes", []):
+        node_id_str = node_data.get("id")
+        node_key = node_data.get("node_key")
+
+        # Find the specific row in the 'nodes' table by its UUID or node_key
+        node_model = existing_nodes_map.get(node_id_str) or existing_keys_map.get(node_key)
+        
+        if node_model:
+            # Safely update columns on the Node table row
+            if "title" in node_data and node_data["title"]:
+                node_model.title = node_data["title"]
+            if "summary" in node_data and node_data["summary"]:
+                node_model.summary = node_data["summary"]
+            if "position_x" in node_data:
+                node_model.position_x = float(node_data["position_x"])
+            if "position_y" in node_data:
+                node_model.position_y = float(node_data["position_y"])
+
+    # 4. Sync the 'edges' table
+    if "edges" in graph_data and graph_data["edges"] is not None:
+        db.query(Edge).filter(Edge.course_id == course.id).delete()
+        for edge_data in graph_data["edges"]:
+            new_edge = Edge(
+                course_id=course.id,
+                source_node_key=edge_data["source_node_key"],
+                target_node_key=edge_data["target_node_key"]
+            )
+            db.add(new_edge)
+
+    db.commit()
+    db.refresh(course)
+    return course

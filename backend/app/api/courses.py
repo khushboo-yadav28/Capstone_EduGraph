@@ -1,5 +1,5 @@
 # app/api/v1/endpoints/courses.py
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import func
@@ -356,3 +356,22 @@ def list_instructor_drafts(
     Used for the instructor dashboard where they can review drafts and click 'Publish'.
     """
     return course_service.get_instructor_draft_courses(db=db, current_user=current_user)
+
+@router.put("/instructor/{course_id}/graph", response_model=Dict[str, Any])
+def update_instructor_course_graph_endpoint(
+    course_id: UUID,
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
+):
+    """
+    Saves changes made by an instructor on the React Flow canvas 
+    (Node positions, titles, summaries, and edge connections) before publishing.
+    """
+    updated_course = course_service.update_instructor_course_graph(
+        db=db,
+        course_id=course_id,
+        graph_data=payload,
+        current_user=current_user
+    )
+    return {"message": "Course graph updated successfully", "course_id": str(updated_course.id)}

@@ -69,9 +69,9 @@ class GeminiNodeSchema(BaseModel):
     )
     quizzes: List[GeminiQuizSchema] = Field(
         ..., 
-        min_items=5, 
-        max_items=5, 
-        description="EXACTLY 5 high-quality multiple choice questions testing this specific concept."
+        min_items=10, 
+        max_items=20, 
+        description="Generate either 10 questions (1 quiz block) or 20 questions (2 quiz blocks of 10) per node as a multiple of 10."
     )
 
 
@@ -112,42 +112,86 @@ def extract_course_graph_from_pdf(
 
     CRITICAL INSTRUCTIONS:
     1. TOPOLOGY & KNOWLEDGE GRAPH:
-       - Extract the top 4 primary learning concepts as ordered nodes with unique keys ('node_1', 'node_2', 'node_3', 'node_4').
-       - Node keys MUST strictly follow lowercase string format ('node_1', 'node_2').
-       - Create directed edges (source_node_key -> target_node_key) using exact node keys to define prerequisite learning flow.
-       - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
+       - Extract learning concepts as ordered nodes with unique lowercase keys ('node_1', 'node_2', etc.).
+       - Create directed edges (source_node_key -> target_node_key) to define prerequisite learning flow forming a valid DAG with NO cycles.
 
-    2. NODE QUANTITY & GRANULARITY (TESTING BUDGET):
-       - Extract EXACTLY 4 major concept nodes from the PDF material.
-       - Group closely related sub-topics into a single comprehensive node rather than creating micro-nodes.
+    2. DYNAMIC NODE QUANTITY & GRANULARITY (BASED ON PDF LENGTH):
+       - Determine the scope/length of the uploaded PDF and scale the number of nodes accordingly:
+         * 1 to 20 pages: Extract 3-4 nodes.
+         * 21 to 50 pages: Extract 5-7 nodes.
+         * 51 to 100 pages: Extract 8-12 nodes.
+         * 100+ pages: Extract 12+ nodes.
+       - Group closely related sub-topics into comprehensive nodes rather than micro-nodes.
 
-    3. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
+    3. NODE CONTENT, SUMMARY & FORMATTING:
        - Target Depth Level: University / Rigorous Academic standard.
-       - Word Count: Each node summary should be comprehensive (roughly 250 to 450 words).
+       - Word Count: Each node summary must be comprehensive (roughly 250 to 450 words, rich in detail even if the underlying PDF source text is brief).
        - Formatting: Use Markdown with a hybrid structure:
          * A 2-3 sentence overview introducing the core concept.
-         * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
-         * A short practical example or real-world use-case illustrating the concept in action.
-       - Contextual Continuity & Cross-Referencing:
-         * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
-         * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
-       - Augmentation & Enrichment:
-         * Include source PDF page references (e.g., "Pages 12-15").
-         * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
-         * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
-         * Do NOT introduce completely unrelated subtopics.
+         * A section of 3-5 DETAILED bullet points (each 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
+         * A practical example or real-world use-case.
+       - Contextual Continuity: Relate current nodes back to upstream prerequisites (e.g., "Building on [Prerequisite Node Title]...").
+       - Page References: Include explicit source PDF page references (e.g., "Pages 12-15").
 
     4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
        - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
-       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
+       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL UNLESS an explicit YouTube link is written in the PDF text.
 
-    5. QUESTION BANK (FAST TESTING MODE):
-       - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
+    5. DYNAMIC QUESTION BANK (MULTIPLE OF 10 RULE):
+       - For each node, generate quizzes subject to strict limits:
+         * **Lower Limit**: 1 quiz per node containing exactly 10 questions.
+         * **Upper Limit**: 2 quizzes per node, where each quiz contains exactly 10 questions (totaling 20 questions for that node).
+       - Use 2 quizzes for larger/denser nodes, and 1 quiz for shorter/focused nodes.
        - Each question MUST have exactly 4 options.
        - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
-       - Vary difficulty across EASY, MEDIUM, and HARD.
-       - Provide thorough explanations for every answer.
+       - Vary difficulty across EASY, MEDIUM, and HARD, and provide thorough explanations for every answer.
     """
+
+
+    
+    
+    # """
+    # You are an expert Curriculum Engineer and Instructional Designer.
+    # Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
+
+    # CRITICAL INSTRUCTIONS:
+    # 1. TOPOLOGY & KNOWLEDGE GRAPH:
+    #    - Extract the top 4 primary learning concepts as ordered nodes with unique keys ('node_1', 'node_2', 'node_3', 'node_4').
+    #    - Node keys MUST strictly follow lowercase string format ('node_1', 'node_2').
+    #    - Create directed edges (source_node_key -> target_node_key) using exact node keys to define prerequisite learning flow.
+    #    - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
+
+    # 2. NODE QUANTITY & GRANULARITY (TESTING BUDGET):
+    #    - Extract EXACTLY 4 major concept nodes from the PDF material.
+    #    - Group closely related sub-topics into a single comprehensive node rather than creating micro-nodes.
+
+    # 3. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
+    #    - Target Depth Level: University / Rigorous Academic standard.
+    #    - Word Count: Each node summary should be comprehensive (roughly 250 to 450 words).
+    #    - Formatting: Use Markdown with a hybrid structure:
+    #      * A 2-3 sentence overview introducing the core concept.
+    #      * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
+    #      * A short practical example or real-world use-case illustrating the concept in action.
+    #    - Contextual Continuity & Cross-Referencing:
+    #      * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
+    #      * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
+    #    - Augmentation & Enrichment:
+    #      * Include source PDF page references (e.g., "Pages 12-15").
+    #      * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
+    #      * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
+    #      * Do NOT introduce completely unrelated subtopics.
+
+    # 4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
+    #    - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
+    #    - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
+
+    # 5. QUESTION BANK (FAST TESTING MODE):
+    #    - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
+    #    - Each question MUST have exactly 4 options.
+    #    - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
+    #    - Vary difficulty across EASY, MEDIUM, and HARD.
+    #    - Provide thorough explanations for every answer.
+    # """
 
 
 
