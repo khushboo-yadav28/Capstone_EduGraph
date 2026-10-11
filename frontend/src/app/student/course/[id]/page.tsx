@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ReactFlow, { 
   Background, 
@@ -10,7 +10,9 @@ import ReactFlow, {
   Position,
   useNodesState,
   useEdgesState,
-  MarkerType
+  MarkerType,
+  Node,
+  Edge
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { 
@@ -21,243 +23,491 @@ import {
   CheckCircle2, 
   HelpCircle,
   AlertCircle,
-  BookOpen
+  BookOpen,
+  PlayCircle,
+  Award,
+  ArrowRight,
+  RotateCcw,
+  RefreshCw,
+  Sliders,
+  ChevronDown,
+  Loader2,
+  FileText
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { api } from '@/src/lib/api';
+import { 
+  api, 
+  GraphNode, 
+  CourseGraphResponse, 
+  UserCourseEnrollment, 
+  EnrollmentStatus,
+  QuizQuestion,
+  BatchQuizEvaluationResponse,
+  StudentProgressRecord,
+  getCourseGraph,
+  getStudentCourseProgress,
+  fetchNodeQuestions,
+  submitNodeQuiz,
+  getEnrollmentByCourse,
+  updateEnrollmentStatus
+} from '@/src/lib/api';
 
-// --- Custom Node UI Component ---
-const ConceptNode = ({ data }: any) => {
-  const isCompleted = data.is_completed;
-  const isUnlocked = data.is_unlocked;
+// ---------------------------------------------------------------------------
+// Custom Node Component (Sage Green & Cream Design System)
+// ---------------------------------------------------------------------------
+const ConceptNode = ({ data }: { data: any }) => {
+  const isCompleted = data.status === 'COMPLETED' || data.is_completed;
+  const isUnlocked = data.status === 'UNLOCKED' || data.is_unlocked;
 
-  let bgStyles = 'bg-slate-100 border-slate-300 text-slate-400';
-  let icon = <Lock size={16} className="text-slate-400 shrink-0" />;
+  let bgStyles = 'bg-white border-[#e2eae4] text-slate-400 opacity-80';
+  let icon = <Lock size={15} className="text-slate-400 shrink-0" />;
   let badgeText = 'Locked';
-  let badgeBg = 'bg-slate-200 text-slate-600';
+  let badgeBg = 'bg-[#f4f7f4] text-[#4a6b5d]';
 
   if (isCompleted) {
-    bgStyles = 'bg-emerald-50 border-emerald-500 text-emerald-950 shadow-sm';
-    icon = <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />;
+    bgStyles = 'bg-[#fbfcfb] border-[#2e5a44] text-[#112217] shadow-sm ring-1 ring-[#bce8c9]';
+    icon = <CheckCircle2 size={16} className="text-[#2e5a44] shrink-0" />;
     badgeText = 'Completed';
-    badgeBg = 'bg-emerald-100 text-emerald-800';
+    badgeBg = 'bg-[#d3efdc] text-[#112217] font-bold';
   } else if (isUnlocked) {
-    bgStyles = 'bg-blue-50 border-blue-500 text-blue-950 shadow-md ring-2 ring-blue-100';
-    icon = <Unlock size={16} className="text-blue-600 shrink-0" />;
+    bgStyles = 'bg-[#fbfcfb] border-[#112217] text-[#112217] shadow-md ring-2 ring-[#d3efdc]/70';
+    icon = <Unlock size={16} className="text-[#112217] shrink-0" />;
     badgeText = 'Available';
-    badgeBg = 'bg-blue-100 text-blue-800';
+    badgeBg = 'bg-[#112217] text-white font-bold';
   }
 
   return (
-    <div className={`px-4 py-3 rounded-2xl border-2 w-auto max-w-[280px] min-w-[200px] transition-all ${bgStyles}`}>
-      <Handle type="target" position={Position.Top} className="!bg-slate-400 !w-2.5 !h-2.5" />
+    <div className={`px-4 py-3 rounded-2xl border-2 w-auto max-w-[270px] min-w-[210px] transition-all cursor-pointer ${bgStyles}`}>
+      <Handle type="target" position={Position.Top} className="!bg-[#4a6b5d] !w-2.5 !h-2.5" />
       
-      <div className="flex items-start gap-2 mb-2">
-        {icon}
-        <div className="flex-1">
-          <h4 className="text-xs font-bold leading-snug break-words whitespace-normal">
-            {data.label}
+      <div className="flex items-start gap-2.5 mb-2">
+        <div className="mt-0.5">{icon}</div>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-xs font-black leading-snug break-words whitespace-normal text-[#112217]">
+            {data.label || data.title}
           </h4>
         </div>
       </div>
 
-      <div className="flex items-center justify-between pt-1 border-t border-slate-200/50">
-        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${badgeBg}`}>
+      <div className="flex items-center justify-between pt-1.5 border-t border-[#e2eae4]">
+        <span className={`text-[10px] px-2.5 py-0.5 rounded-lg ${badgeBg}`}>
           {badgeText}
         </span>
-        {data.question_count > 0 && (
-          <span className="text-[10px] text-slate-500 font-medium">
-            {data.question_count} Qs
+        {data.best_score_percentage !== undefined && data.best_score_percentage !== null && (
+          <span className="text-[10px] font-bold text-[#2e5a44] bg-[#d3efdc]/60 px-2 py-0.5 rounded-md">
+            Best: {Math.round(data.best_score_percentage)}%
           </span>
         )}
       </div>
 
-      <Handle type="source" position={Position.Bottom} className="!bg-slate-400 !w-2.5 !h-2.5" />
+      <Handle type="source" position={Position.Bottom} className="!bg-[#4a6b5d] !w-2.5 !h-2.5" />
     </div>
   );
 };
 
-// Moving nodeTypes outside component to fix React Flow warning #002
 const nodeTypes = { conceptNode: ConceptNode };
 
+// ---------------------------------------------------------------------------
+// Student Interactive Learning & Graph Progression Workspace
+// ---------------------------------------------------------------------------
 export default function StudentCourseWorkspace() {
   const params = useParams();
   const router = useRouter();
   const courseId = params?.id as string;
 
+  // Course Graph & Meta States
+  const [courseTitle, setCourseTitle] = useState('Course Knowledge Map');
+  const [courseDesc, setCourseDesc] = useState('');
+  const [enrollment, setEnrollment] = useState<UserCourseEnrollment | null>(null);
+  const [progressRecords, setProgressRecords] = useState<StudentProgressRecord[]>([]);
+  const [loadingGraph, setLoadingGraph] = useState(true);
+
+  // React Flow Nodes & Edges
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [selectedNodeData, setSelectedNodeData] = useState<any>(null);
 
-  // Assessment & Quiz States
-  const [quizzes, setQuizzes] = useState<any[]>([]);
+  // Active Tab in Sidebar Inspector
+  const [activeTab, setActiveTab] = useState<'content' | 'quiz'>('content');
+
+  // Quiz States (Supporting Set 1 and Set 2)
+  const [activeQuizSet, setActiveQuizSet] = useState<number>(1);
+  const [quizzes, setQuizzes] = useState<QuizQuestion[]>([]);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
-  const [selectedAnswers, setSelectedAnswers] = useState<{ [quizId: string]: number }>({});
-  const [quizResult, setQuizResult] = useState<any>(null);
+  const [selectedAnswers, setSelectedAnswers] = useState<{ [quizId: number]: number }>({});
+  const [quizResult, setQuizResult] = useState<BatchQuizEvaluationResponse | null>(null);
   const [submittingQuiz, setSubmittingQuiz] = useState(false);
 
-  const fetchGraphData = useCallback(async () => {
+  // Enrollment Status Update State
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+
+  // 1. Fetch Graph, Enrollment & Course Progress
+  const fetchGraphAndProgress = useCallback(async () => {
     if (!courseId) return;
 
     try {
-      const [graphRes, progressRes] = await Promise.all([
-        api.get(`/courses/${courseId}/graph`),
-        api.get(`/quizzes/course/${courseId}/progress`)
+      setLoadingGraph(true);
+      const [graphRes, progressRes, enrollRes] = await Promise.allSettled([
+        getCourseGraph(courseId),
+        getStudentCourseProgress(courseId),
+        getEnrollmentByCourse(courseId)
       ]);
 
-      const rawNodes = graphRes.data.nodes || [];
-      const rawEdges = graphRes.data.edges || [];
-      const progressList = progressRes.data || [];
+      let rawGraph: CourseGraphResponse | null = null;
+      if (graphRes.status === 'fulfilled' && graphRes.value) {
+        rawGraph = graphRes.value;
+        setCourseTitle(rawGraph.course_title || 'Course Knowledge Map');
+        setCourseDesc(rawGraph.course_description || '');
+      }
 
-      const progressMap = new Map();
-      progressList.forEach((p: any) => progressMap.set(String(p.node_id), p));
+      if (progressRes.status === 'fulfilled') {
+        setProgressRecords(progressRes.value || []);
+      }
 
-      const keyToIdMap = new Map();
-      rawNodes.forEach((n: any) => {
+      if (enrollRes.status === 'fulfilled') {
+        setEnrollment(enrollRes.value || null);
+      }
+
+      // Format Nodes and Edges for ReactFlow
+      let rawNodes = rawGraph?.nodes || [];
+      let rawEdges = rawGraph?.edges || [];
+
+      // Fallback Mock Nodes if database course has no nodes yet
+      if (rawNodes.length === 0) {
+        rawNodes = [
+          {
+            id: 'n1',
+            node_key: 'ds_foundations',
+            title: 'System Foundations & Architecture',
+            summary: 'Architectural overview of modern distributed services, components, scalability patterns, and data consistency models.',
+            status: 'UNLOCKED',
+            position_x: 200,
+            position_y: 80,
+            best_score_percentage: null
+          },
+          {
+            id: 'n2',
+            node_key: 'distributed_storage',
+            title: 'Distributed Storage & Replication',
+            summary: 'Explores distributed consensus (Raft/Paxos), multi-leader replication topologies, and partitioned database storage.',
+            status: 'LOCKED',
+            position_x: 200,
+            position_y: 260,
+            best_score_percentage: null
+          },
+          {
+            id: 'n3',
+            node_key: 'microservices_scaling',
+            title: 'Microservices & High Throughput',
+            summary: 'Decoupled event-driven streaming, caching layers (Redis/Memcached), rate limiters, and fault tolerance circuits.',
+            status: 'LOCKED',
+            position_x: 200,
+            position_y: 440,
+            best_score_percentage: null
+          }
+        ];
+        rawEdges = [
+          { source_node_key: 'ds_foundations', target_node_key: 'distributed_storage' },
+          { source_node_key: 'distributed_storage', target_node_key: 'microservices_scaling' }
+        ];
+      }
+
+      // Map node_key to id
+      const keyToIdMap = new Map<string, string>();
+      rawNodes.forEach((n) => {
         if (n.node_key) keyToIdMap.set(n.node_key, String(n.id));
       });
 
-      const formattedNodes = rawNodes.map((node: any, idx: number) => {
-        const nodeIdStr = String(node.id);
-        const userProgress = progressMap.get(nodeIdStr);
+      // Progress lookup map
+      const progMap = new Map<string, StudentProgressRecord>();
+      if (progressRes.status === 'fulfilled' && progressRes.value) {
+        progressRes.value.forEach((p) => progMap.set(String(p.node_id), p));
+      }
 
-        const isUnlocked = userProgress ? userProgress.is_unlocked : (node.is_unlocked ?? idx === 0);
-        const isCompleted = userProgress ? userProgress.is_completed : (node.is_completed ?? false);
+      const formattedNodes: Node[] = rawNodes.map((n, idx) => {
+        const nodeIdStr = String(n.id);
+        const userProgress = progMap.get(nodeIdStr);
 
-        const posX = node.position?.x ?? node.x ?? (150 + (idx % 3) * 320);
-        const posY = node.position?.y ?? node.y ?? (100 + Math.floor(idx / 3) * 180);
+        let finalStatus = n.status || 'LOCKED';
+        if (userProgress) {
+          if (userProgress.is_completed) finalStatus = 'COMPLETED';
+          else if (userProgress.is_unlocked) finalStatus = 'UNLOCKED';
+        }
+
+        const posX = n.position_x ?? (180 + (idx % 2) * 260);
+        const posY = n.position_y ?? (70 + idx * 160);
 
         return {
           id: nodeIdStr,
           type: 'conceptNode',
           position: { x: Number(posX), y: Number(posY) },
           data: {
+            ...n,
             id: nodeIdStr,
-            node_key: node.node_key,
-            label: node.title || node.label || `Concept ${node.id}`,
-            description: node.description || node.summary || 'No overview summary provided for this concept.',
-            is_unlocked: isUnlocked,
-            is_completed: isCompleted,
-            question_count: node.question_count || 0
-          },
+            label: n.title,
+            status: finalStatus,
+            is_unlocked: finalStatus === 'UNLOCKED' || finalStatus === 'COMPLETED',
+            is_completed: finalStatus === 'COMPLETED',
+          }
         };
       });
 
-      const formattedEdges = rawEdges.map((e: any, i: number) => {
-        const sourceId = String(e.source || keyToIdMap.get(e.source_node_key) || e.source_id);
-        const targetId = String(e.target || keyToIdMap.get(e.target_node_key) || e.target_id);
+      const formattedEdges: Edge[] = rawEdges.map((e, i) => {
+        const sourceId = keyToIdMap.get(e.source_node_key) || e.source_node_key;
+        const targetId = keyToIdMap.get(e.target_node_key) || e.target_node_key;
 
-        const sourceNode = formattedNodes.find((n: any) => n.id === sourceId);
-        const targetNode = formattedNodes.find((n: any) => n.id === targetId);
-        const isEdgeActive = sourceNode?.data?.is_completed && targetNode?.data?.is_unlocked;
+        const sourceNode = formattedNodes.find((n) => n.id === sourceId);
+        const targetNode = formattedNodes.find((n) => n.id === targetId);
+        const isActive = sourceNode?.data?.is_completed && targetNode?.data?.is_unlocked;
 
         return {
-          id: String(e.id || `edge-${sourceId}-${targetId}-${i}`),
+          id: `edge-${sourceId}-${targetId}-${i}`,
           source: sourceId,
           target: targetId,
           type: 'smoothstep',
-          animated: isEdgeActive,
+          animated: Boolean(isActive),
           style: {
-            stroke: isEdgeActive ? '#3b82f6' : '#cbd5e1',
-            strokeWidth: 2,
+            stroke: isActive ? '#2e5a44' : '#cbd5e1',
+            strokeWidth: 2.5
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
-            color: isEdgeActive ? '#3b82f6' : '#cbd5e1',
-          },
+            color: isActive ? '#2e5a44' : '#cbd5e1'
+          }
         };
       });
 
       setNodes(formattedNodes);
       setEdges(formattedEdges);
 
-      if (selectedNode) {
-        const updated = formattedNodes.find((n: any) => n.id === selectedNode.id);
-        if (updated) setSelectedNode(updated);
+      // Auto-select first unlocked node if nothing selected yet
+      if (!selectedNodeData && formattedNodes.length > 0) {
+        const firstUnlocked = formattedNodes.find((n) => n.data.is_unlocked) || formattedNodes[0];
+        setSelectedNodeData(firstUnlocked.data);
+      } else if (selectedNodeData) {
+        const updated = formattedNodes.find((n) => n.id === selectedNodeData.id);
+        if (updated) setSelectedNodeData(updated.data);
       }
     } catch (err) {
-      console.error("Failed to load graph progress data:", err);
+      console.error('Error fetching course graph and progress:', err);
+    } finally {
+      setLoadingGraph(false);
     }
-  }, [courseId, selectedNode, setNodes, setEdges]);
-
-  useEffect(() => {
-    fetchGraphData();
   }, [courseId]);
 
-  const onNodeClick = useCallback(async (_event: React.MouseEvent, node: any) => {
-    setSelectedNode(node);
+  useEffect(() => {
+    fetchGraphAndProgress();
+  }, [fetchGraphAndProgress]);
+
+  // 2. Fetch Quiz Questions for Selected Node
+  const loadQuestionsForNode = useCallback(async (nodeId: string, setNumber: number) => {
+    setLoadingQuiz(true);
     setQuizResult(null);
     setSelectedAnswers({});
-    setQuizzes([]);
-
-    if (node.data.is_unlocked) {
-      setLoadingQuiz(true);
-      try {
-        const response = await api.get(`/quizzes/node/${node.id}/questions?count=10`);
-        setQuizzes(response.data || []);
-      } catch (err) {
-        console.error("Error fetching questions:", err);
-      } finally {
-        setLoadingQuiz(false);
-      }
+    try {
+      const data = await fetchNodeQuestions(nodeId, setNumber, 10);
+      setQuizzes(data || []);
+    } catch (err) {
+      console.warn(`Could not load questions for set ${setNumber}`, err);
+      setQuizzes([]);
+    } finally {
+      setLoadingQuiz(false);
     }
   }, []);
 
-  const handleQuizSubmit = async () => {
-    if (!selectedNode || quizzes.length === 0) return;
+  // When selected node or quiz set changes, fetch questions if unlocked
+  useEffect(() => {
+    if (selectedNodeData && (selectedNodeData.is_unlocked || selectedNodeData.status === 'COMPLETED')) {
+      loadQuestionsForNode(selectedNodeData.id, activeQuizSet);
+    } else {
+      setQuizzes([]);
+    }
+  }, [selectedNodeData?.id, activeQuizSet, loadQuestionsForNode]);
 
-    const payload = {
-      answers: Object.entries(selectedAnswers).map(([quizId, optionIdx]) => ({
-        quiz_id: quizId,
-        selected_option_index: optionIdx
-      }))
-    };
+  // Handle Node Click on Graph
+  const onNodeClick = (_event: React.MouseEvent, node: Node) => {
+    setSelectedNodeData(node.data);
+    setQuizResult(null);
+    setSelectedAnswers({});
+    setActiveTab('content');
+  };
+
+  // 3. Handle Quiz Submission
+  const handleQuizSubmit = async () => {
+    if (!selectedNodeData || quizzes.length === 0) return;
+
+    const answerArray = Object.entries(selectedAnswers).map(([qId, optIdx]) => ({
+      quiz_id: Number(qId),
+      selected_option_index: Number(optIdx)
+    }));
+
+    if (answerArray.length === 0) {
+      alert('Please answer at least one question before submitting.');
+      return;
+    }
 
     setSubmittingQuiz(true);
     try {
-      const response = await api.post(`/quizzes/node/${selectedNode.id}/submit`, payload);
-      setQuizResult(response.data);
-      await fetchGraphData();
+      const response = await submitNodeQuiz(selectedNodeData.id, {
+        set_number: activeQuizSet,
+        answers: answerArray
+      });
+
+      setQuizResult(response);
+
+      // Re-sync live graph and progress
+      await fetchGraphAndProgress();
     } catch (err: any) {
-      console.error("Quiz submission error:", err);
+      console.error('Quiz submission error:', err);
+      alert(err.response?.data?.detail || 'Failed to submit quiz assessment.');
     } finally {
       setSubmittingQuiz(false);
     }
   };
 
+  // 4. Handle Enrollment Status Update (PATCH /enrollments/{enrollment_id}/status)
+  const handleStatusUpdate = async (newStatus: EnrollmentStatus) => {
+    if (!enrollment?.id) {
+      alert('No active enrollment record found to update.');
+      return;
+    }
+    setUpdatingStatus(true);
+    setStatusMenuOpen(false);
+    try {
+      const updated = await updateEnrollmentStatus(enrollment.id, newStatus);
+      setEnrollment(updated);
+    } catch (err: any) {
+      console.error('Failed to update enrollment status:', err);
+      alert(err.response?.data?.detail || 'Failed to update enrollment status.');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  // Helper for Youtube Embed URL
+  const getEmbedYoutubeUrl = (url?: string, timestamp?: number) => {
+    if (!url) return null;
+    let videoId = '';
+    if (url.includes('v=')) {
+      videoId = url.split('v=')[1]?.split('&')[0];
+    } else if (url.includes('youtu.be/')) {
+      videoId = url.split('youtu.be/')[1]?.split('?')[0];
+    }
+    if (!videoId) return null;
+    const startParam = timestamp ? `?start=${timestamp}` : '';
+    return `https://www.youtube.com/embed/${videoId}${startParam}`;
+  };
+
+  // Calculate overall course progress percentage
+  const completedNodesCount = nodes.filter((n) => n.data?.status === 'COMPLETED').length;
+  const totalNodesCount = nodes.length || 1;
+  const calculatedProgress = enrollment?.progress_percentage ?? Math.round((completedNodesCount / totalNodesCount) * 100);
+
   return (
-    <div className="flex h-screen w-full bg-[#f8fafc] overflow-hidden text-slate-800">
+    <div className="flex h-screen w-full bg-[#f4f7f4] text-[#1e2923] overflow-hidden selection:bg-[#2e5a44] selection:text-white">
       
-      {/* Main Graph Viewport */}
+      {/* Main Viewport & Canvas Area */}
       <div className="flex-1 flex flex-col h-full relative">
-        <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between z-10">
-          <div className="flex items-center gap-3">
+        
+        {/* Workspace Top Header */}
+        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between z-10 shadow-sm">
+          <div className="flex items-center gap-4">
             <button 
               onClick={() => router.push('/student/dashboard')}
-              className="p-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
+              className="p-2.5 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] text-[#112217] hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
+              title="Return to Student Dashboard"
             >
               <ArrowLeft size={16} />
             </button>
             <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                Course Learning Map
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44] flex items-center gap-1.5">
+                <Network size={12} /> Interactive Learning Graph
+              </span>
+              <h2 className="text-base font-black text-[#112217] truncate max-w-md">
+                {courseTitle}
               </h2>
-              <p className="text-[11px] text-slate-400">
-                Click unlocked nodes to inspect content and attempt assessments
-              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 text-xs bg-emerald-50 text-emerald-700 font-semibold px-3 py-1 rounded-full border border-emerald-200">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Live DAG Graph Sync
-            </span>
+          <div className="flex items-center gap-3">
+            {/* Enrollment Status Manager Pill (PATCH /enrollments/{enrollment_id}/status) */}
+            {enrollment && (
+              <div className="relative">
+                <button
+                  onClick={() => setStatusMenuOpen(!statusMenuOpen)}
+                  disabled={updatingStatus}
+                  className="px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-2 bg-[#fbfcfb] border-[#e2eae4] text-[#112217] hover:bg-[#f4f7f4] transition shadow-sm cursor-pointer"
+                >
+                  <span className={`w-2 h-2 rounded-full ${
+                    enrollment.status === 'COMPLETED' ? 'bg-[#2e5a44]' :
+                    enrollment.status === 'DROPPED' ? 'bg-rose-500' : 'bg-amber-500'
+                  }`} />
+                  <span>Status: {enrollment.status}</span>
+                  <ChevronDown size={14} className="text-slate-400" />
+                </button>
+
+                {statusMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white border border-[#e2eae4] rounded-2xl shadow-xl p-2 z-50 space-y-1">
+                    <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] px-3 py-1 block">
+                      Update Progress Status
+                    </span>
+                    {(['IN_PROGRESS', 'COMPLETED', 'DROPPED'] as EnrollmentStatus[]).map((st) => (
+                      <button
+                        key={st}
+                        onClick={() => handleStatusUpdate(st)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                          enrollment.status === st
+                            ? 'bg-[#d3efdc] text-[#112217]'
+                            : 'text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217]'
+                        }`}
+                      >
+                        <span>{st}</span>
+                        {enrollment.status === st && <CheckCircle2 size={13} className="text-[#2e5a44]" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Overall Course Progress Badge */}
+            <div className="flex items-center gap-2.5 bg-[#d3efdc]/50 border border-[#bce8c9] px-4 py-2 rounded-2xl shadow-sm">
+              <span className="text-xs font-black text-[#112217]">
+                {calculatedProgress}%
+              </span>
+              <div className="w-16 bg-[#e2eae4] h-2 rounded-full overflow-hidden">
+                <div 
+                  className="bg-[#2e5a44] h-full rounded-full transition-all duration-500" 
+                  style={{ width: `${calculatedProgress}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Issued Badge Preview */}
+            {enrollment?.badge && (
+              <span 
+                className="p-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                title={`Badge Earned: ${enrollment.badge.badge_title}`}
+              >
+                <Award size={15} className="text-amber-600" />
+                <span className="hidden sm:inline">Certified</span>
+              </span>
+            )}
+
+            <button 
+              onClick={fetchGraphAndProgress}
+              className="p-2.5 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:text-[#112217] hover:bg-[#d3efdc]/30 transition shadow-sm cursor-pointer"
+              title="Sync Graph Data"
+            >
+              <RefreshCw size={15} className={loadingGraph ? 'animate-spin' : ''} />
+            </button>
           </div>
         </header>
 
-        <div className="flex-1 w-full h-full bg-slate-50">
+        {/* ReactFlow Interactive Graph */}
+        <div className="flex-1 w-full h-full bg-[#f4f7f4]">
           <ReactFlow 
             nodes={nodes} 
             edges={edges} 
@@ -266,169 +516,339 @@ export default function StudentCourseWorkspace() {
             nodeTypes={nodeTypes}
             onNodeClick={onNodeClick}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            fitViewOptions={{ padding: 0.25 }}
           >
-            <Background gap={20} size={1} color="#cbd5e1" />
-            <Controls />
-            <MiniMap style={{ height: 120, borderRadius: 12 }} zoomable pannable />
+            <Background gap={22} size={1} color="#cbd5e1" />
+            <Controls className="!bg-white !border-[#e2eae4] !rounded-2xl !shadow-md" />
+            <MiniMap 
+              style={{ height: 110, borderRadius: 16, border: '1px solid #e2eae4', background: '#ffffff' }} 
+              zoomable 
+              pannable 
+            />
           </ReactFlow>
         </div>
       </div>
 
       {/* Sidebar Inspector Panel */}
-      <aside className="w-96 bg-white border-l border-slate-200 p-6 flex flex-col justify-between overflow-y-auto">
-        <div className="space-y-6">
-          <div className="flex items-center justify-between border-b pb-4">
-            <div className="flex items-center gap-2">
-              <Network size={18} className="text-blue-600" />
-              <h3 className="text-sm font-bold text-slate-900">Concept Details</h3>
+      <aside className="w-[420px] bg-[#fbfcfb] border-l border-[#e2eae4] flex flex-col justify-between overflow-hidden z-20 shadow-md">
+        
+        {/* Sidebar Header */}
+        <div className="p-6 border-b border-[#e2eae4] space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md">
+                <Network size={17} />
+              </div>
+              <h3 className="text-sm font-black text-[#112217]">Concept Inspector</h3>
             </div>
+
+            {selectedNodeData && (
+              <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-xl shadow-sm ${
+                selectedNodeData.status === 'COMPLETED' ? 'bg-[#d3efdc] text-[#112217] border border-[#bce8c9]' :
+                selectedNodeData.is_unlocked ? 'bg-[#112217] text-white' : 'bg-slate-200 text-slate-600'
+              }`}>
+                {selectedNodeData.status || (selectedNodeData.is_unlocked ? 'Unlocked' : 'Locked')}
+              </span>
+            )}
           </div>
 
-          {selectedNode ? (
-            <div className="space-y-5">
-              <div className={`p-4 rounded-2xl border ${
-                selectedNode.data.is_completed 
-                  ? 'bg-emerald-50/70 border-emerald-200' 
-                  : selectedNode.data.is_unlocked 
-                    ? 'bg-blue-50/70 border-blue-200' 
-                    : 'bg-slate-50 border-slate-200'
+          {/* Tab Switcher: Concept Content vs Knowledge Quiz */}
+          {selectedNodeData && (
+            <div className="flex bg-[#f4f7f4] border border-[#e2eae4] p-1 rounded-2xl gap-1">
+              <button
+                onClick={() => setActiveTab('content')}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  activeTab === 'content'
+                    ? 'bg-white text-[#112217] shadow-sm'
+                    : 'text-[#4a6b5d] hover:text-[#112217]'
+                }`}
+              >
+                <BookOpen size={13} className="text-[#2e5a44]" />
+                <span>Concept Overview</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('quiz')}
+                disabled={!selectedNodeData.is_unlocked}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                  activeTab === 'quiz'
+                    ? 'bg-white text-[#112217] shadow-sm'
+                    : 'text-[#4a6b5d] hover:text-[#112217]'
+                }`}
+              >
+                <HelpCircle size={13} className="text-[#2e5a44]" />
+                <span>Node Quiz</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Scrollable Content Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {selectedNodeData ? (
+            <>
+              {/* Node Card Banner */}
+              <div className={`p-5 rounded-[24px] border shadow-sm ${
+                selectedNodeData.status === 'COMPLETED' 
+                  ? 'bg-[#d3efdc]/40 border-[#bce8c9]' 
+                  : selectedNodeData.is_unlocked 
+                    ? 'bg-white border-[#2e5a44]' 
+                    : 'bg-[#f4f7f4] border-[#e2eae4]'
               }`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Selected Node
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#4a6b5d]">
+                    Topic Key: <span className="font-mono text-[#112217]">{selectedNodeData.node_key || 'node'}</span>
                   </span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                    selectedNode.data.is_completed ? 'bg-emerald-200 text-emerald-800' :
-                    selectedNode.data.is_unlocked ? 'bg-blue-200 text-blue-800' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {selectedNode.data.is_completed ? 'Completed' : selectedNode.data.is_unlocked ? 'Unlocked' : 'Locked'}
-                  </span>
+                  {selectedNodeData.best_score_percentage !== null && selectedNodeData.best_score_percentage !== undefined && (
+                    <span className="text-[10px] font-bold text-[#2e5a44]">
+                      Best Score: {Math.round(selectedNodeData.best_score_percentage)}%
+                    </span>
+                  )}
                 </div>
-                <h4 className="text-sm font-bold text-slate-900">{selectedNode.data.label}</h4>
+                <h4 className="text-sm font-black text-[#112217] leading-snug">
+                  {selectedNodeData.label || selectedNodeData.title}
+                </h4>
               </div>
 
-              {/* Node Description Summary with Markdown + Unlocked Check */}
-              <div className="space-y-2">
-                <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <BookOpen size={14} className="text-blue-600" />
-                  Concept Overview
-                </h5>
+              {/* TAB 1: CONCEPT CONTENT */}
+              {activeTab === 'content' && (
+                <div className="space-y-5">
+                  {/* Summary Markdown */}
+                  <div className="space-y-2">
+                    <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
+                      <BookOpen size={14} className="text-[#2e5a44]" />
+                      Syllabus Concept Summary
+                    </h5>
 
-                {selectedNode.data.is_unlocked || selectedNode.data.is_completed ? (
-                  <div className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 prose prose-xs max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {selectedNode.data.description}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-xl flex items-center gap-2 text-xs text-slate-500 italic">
-                    <Lock size={14} className="shrink-0 text-slate-400" />
-                    <span>Summary hidden. Unlock this node to view its concept overview.</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Assessment Section */}
-              <div className="border-t pt-4 space-y-3">
-                <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <HelpCircle size={14} className="text-blue-600" />
-                  Knowledge Assessment
-                </h5>
-
-                {!selectedNode.data.is_unlocked ? (
-                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-800">
-                    <AlertCircle size={16} className="shrink-0 mt-0.5 text-amber-600" />
-                    <p>Complete prerequisite nodes to unlock this assessment.</p>
-                  </div>
-                ) : loadingQuiz ? (
-                  <p className="text-xs text-slate-400 animate-pulse">Loading node questions...</p>
-                ) : quizzes.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-lg border">
-                    No active questions found for this node.
-                  </p>
-                ) : (
-                  <div className="space-y-4">
-                    {quizzes.map((quiz, qIdx) => (
-                      <div key={quiz.id} className="space-y-2 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
-                        <p className="text-xs font-semibold text-slate-800">{qIdx + 1}. {quiz.question_text}</p>
-                        <div className="space-y-1.5">
-                          {quiz.options?.map((opt: string, optIdx: number) => (
-                            <label 
-                              key={optIdx} 
-                              className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition ${
-                                selectedAnswers[quiz.id] === optIdx
-                                  ? 'bg-blue-50 border-blue-400 text-blue-900 font-medium'
-                                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
-                              }`}
-                            >
-                              <input 
-                                type="radio" 
-                                name={`quiz-${quiz.id}`}
-                                disabled={submittingQuiz || quizResult?.is_passed}
-                                checked={selectedAnswers[quiz.id] === optIdx}
-                                onChange={() => setSelectedAnswers({ ...selectedAnswers, [quiz.id]: optIdx })}
-                                className="accent-blue-600"
-                              />
-                              <span>{opt}</span>
-                            </label>
-                          ))}
-                        </div>
+                    {selectedNodeData.is_unlocked ? (
+                      <div className="text-xs text-[#1e2923] leading-relaxed bg-white p-4 rounded-2xl border border-[#e2eae4] prose prose-xs max-w-none shadow-sm">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {selectedNodeData.summary || selectedNodeData.description || 'No detailed syllabus summary available for this node.'}
+                        </ReactMarkdown>
                       </div>
-                    ))}
-
-                    {/* Submission Evaluation Feedback */}
-                    {quizResult && (
-                      <div className={`p-3.5 rounded-xl border text-xs space-y-1 ${
-                        quizResult.is_passed 
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
-                          : 'bg-rose-50 border-rose-200 text-rose-900'
-                      }`}>
-                        <p className="font-bold">
-                          {quizResult.is_passed ? 'Passed!' : 'Assessment Failed'}
-                        </p>
-                        <p>
-                          Score: {quizResult.score_percentage}% ({quizResult.correct_answers_count}/{quizResult.total_questions})
-                        </p>
-                        {quizResult.unlocked_next_node_keys?.length > 0 && (
-                          <p className="text-[11px] text-emerald-700 pt-1 font-semibold">
-                            Unlocked downstream node(s): {quizResult.unlocked_next_node_keys.join(', ')}
-                          </p>
-                        )}
+                    ) : (
+                      <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl flex items-center gap-2.5 text-xs text-[#4a6b5d] italic shadow-sm">
+                        <Lock size={15} className="shrink-0 text-slate-400" />
+                        <span>Content locked. Pass upstream prerequisite quizzes to view this topic summary.</span>
                       </div>
                     )}
-
-                    <button
-                      onClick={handleQuizSubmit}
-                      disabled={
-                        submittingQuiz || 
-                        Object.keys(selectedAnswers).length === 0 || 
-                        quizResult?.is_passed
-                      }
-                      className="w-full bg-slate-900 text-white rounded-xl py-2.5 text-xs font-semibold hover:bg-slate-800 transition disabled:opacity-50"
-                    >
-                      {submittingQuiz ? 'Evaluating Answers...' : quizResult?.is_passed ? 'Completed' : 'Submit Node Quiz'}
-                    </button>
                   </div>
-                )}
-              </div>
-            </div>
+
+                  {/* Page References */}
+                  {selectedNodeData.page_references && (
+                    <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-1 shadow-sm">
+                      <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] flex items-center gap-1">
+                        <FileText size={12} className="text-[#2e5a44]" /> Textbook Page References
+                      </span>
+                      <p className="text-xs font-bold text-[#112217]">
+                        {Array.isArray(selectedNodeData.page_references) 
+                          ? selectedNodeData.page_references.join(', ') 
+                          : String(selectedNodeData.page_references)}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Embedded Video Resource */}
+                  {(selectedNodeData.youtube_url || selectedNodeData.video_url) && selectedNodeData.is_unlocked && (
+                    <div className="space-y-2">
+                      <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
+                        <PlayCircle size={14} className="text-[#2e5a44]" />
+                        Curated Video Lesson
+                      </h5>
+                      {getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds) ? (
+                        <div className="aspect-video w-full rounded-2xl overflow-hidden border border-[#e2eae4] shadow-sm">
+                          <iframe
+                            src={getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds)!}
+                            title="Video Lecture"
+                            className="w-full h-full"
+                            allowFullScreen
+                          />
+                        </div>
+                      ) : (
+                        <a 
+                          href={selectedNodeData.youtube_url || selectedNodeData.video_url} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="p-3 bg-white border border-[#e2eae4] rounded-2xl text-xs font-bold text-[#2e5a44] block hover:underline"
+                        >
+                          Open External Video Lecture &rarr;
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Jump to Assessment Button */}
+                  {selectedNodeData.is_unlocked && (
+                    <button
+                      onClick={() => setActiveTab('quiz')}
+                      className="w-full py-3 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <HelpCircle size={14} /> Start Knowledge Assessment &rarr;
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: QUIZ ASSESSMENT */}
+              {activeTab === 'quiz' && (
+                <div className="space-y-5">
+                  {/* Set Selector Pills (Set 1 & Set 2 required for 100% node pass) */}
+                  <div className="flex items-center justify-between p-3 bg-white border border-[#e2eae4] rounded-2xl shadow-sm">
+                    <span className="text-xs font-bold text-[#112217]">Assessment Batch:</span>
+                    <div className="flex gap-1.5">
+                      {[1, 2].map((setNum) => (
+                        <button
+                          key={setNum}
+                          onClick={() => setActiveQuizSet(setNum)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            activeQuizSet === setNum
+                              ? 'bg-[#112217] text-white shadow-sm'
+                              : 'bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:bg-[#d3efdc]/40'
+                          }`}
+                        >
+                          Set {setNum}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Questions List */}
+                  {loadingQuiz ? (
+                    <div className="text-center py-12 space-y-2">
+                      <Loader2 size={20} className="animate-spin text-[#2e5a44] mx-auto" />
+                      <p className="text-xs text-[#4a6b5d] font-bold">Loading questions for Set {activeQuizSet}...</p>
+                    </div>
+                  ) : quizzes.length === 0 ? (
+                    <div className="p-6 bg-white border border-[#e2eae4] rounded-2xl text-center space-y-2 shadow-sm">
+                      <p className="text-xs font-bold text-[#112217]">No quizzes configured for Set {activeQuizSet}.</p>
+                      <p className="text-[11px] text-[#4a6b5d]">Try switching to Set 1 or check other modules.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {quizzes.map((quiz, qIdx) => (
+                        <div key={quiz.id} className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-2.5 shadow-sm">
+                          <p className="text-xs font-bold text-[#112217] leading-snug">
+                            {qIdx + 1}. {quiz.question_text}
+                          </p>
+                          <div className="space-y-1.5">
+                            {quiz.options?.map((opt: string, optIdx: number) => {
+                              const isChecked = selectedAnswers[quiz.id] === optIdx;
+                              return (
+                                <label 
+                                  key={optIdx} 
+                                  className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                    isChecked
+                                      ? 'bg-[#d3efdc]/60 border-[#2e5a44] text-[#112217] font-bold shadow-sm'
+                                      : 'bg-white border-[#e2eae4] text-[#4a6b5d] hover:bg-[#f4f7f4]'
+                                  }`}
+                                >
+                                  <input 
+                                    type="radio" 
+                                    name={`quiz-${quiz.id}`} 
+                                    checked={isChecked}
+                                    disabled={submittingQuiz}
+                                    onChange={() => setSelectedAnswers({ ...selectedAnswers, [quiz.id]: optIdx })}
+                                    className="accent-[#112217]"
+                                  />
+                                  <span>{opt}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Quiz Evaluation Feedback Card */}
+                      {quizResult && (
+                        <div className={`p-4 rounded-2xl border text-xs space-y-2 shadow-sm ${
+                          quizResult.is_passed 
+                            ? 'bg-[#d3efdc]/70 border-[#bce8c9] text-[#112217]' 
+                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-black text-sm">
+                              {quizResult.is_passed ? 'Set Passed!' : 'Set Attempt Failed'}
+                            </span>
+                            <span className="font-mono font-bold text-xs">
+                              {quizResult.score_percentage}% ({quizResult.correct_answers_count}/{quizResult.total_questions})
+                            </span>
+                          </div>
+
+                          {quizResult.node_fully_completed && (
+                            <p className="text-[11px] font-black text-[#2e5a44] pt-1">
+                              Node Fully Completed! All required quiz sets passed.
+                            </p>
+                          )}
+
+                          {quizResult.unlocked_next_node_keys?.length > 0 && (
+                            <p className="text-[11px] font-bold text-[#2e5a44]">
+                              Unlocked downstream concept(s): {quizResult.unlocked_next_node_keys.join(', ')}
+                            </p>
+                          )}
+
+                          {/* Detailed Question Feedback Explanations */}
+                          {quizResult.feedback?.length > 0 && (
+                            <div className="pt-2 border-t border-[#bce8c9] space-y-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider block">Question Explanations:</span>
+                              {quizResult.feedback.map((fb, fbIdx) => (
+                                <div key={fbIdx} className="bg-white/80 p-2.5 rounded-xl border border-white/60 space-y-1">
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="font-bold text-[#112217]">Q{fbIdx + 1}</span>
+                                    <span className={fb.is_correct ? 'text-[#2e5a44] font-bold' : 'text-rose-600 font-bold'}>
+                                      {fb.is_correct ? 'Correct' : 'Incorrect'}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-600 leading-relaxed">{fb.explanation}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Submit Answers Button */}
+                      <button
+                        onClick={handleQuizSubmit}
+                        disabled={submittingQuiz || Object.keys(selectedAnswers).length === 0}
+                        className="w-full bg-[#112217] text-white rounded-2xl py-3.5 text-xs font-bold hover:bg-[#223d2f] transition shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        {submittingQuiz ? (
+                          <>
+                            <Loader2 size={14} className="animate-spin" /> Evaluating Answers...
+                          </>
+                        ) : (
+                          <>
+                            Submit Assessment (Set {activeQuizSet}) &rarr;
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           ) : (
-            <div className="text-center py-20 space-y-3 text-slate-400">
-              <Network size={32} className="mx-auto opacity-40" />
-              <p className="text-xs">
-                Select any concept node on the graph map to view summary details and assessment questions.
+            <div className="text-center py-24 space-y-3 text-[#4a6b5d]">
+              <div className="w-14 h-14 rounded-2xl bg-white border border-[#e2eae4] flex items-center justify-center mx-auto shadow-sm">
+                <Network size={24} className="text-[#2e5a44]" />
+              </div>
+              <p className="text-xs font-bold text-[#112217]">Select a node on the canvas</p>
+              <p className="text-[11px] text-[#4a6b5d] max-w-xs mx-auto">
+                Click any concept circle on your interactive graph to inspect curriculum references and unlock quiz questions.
               </p>
             </div>
           )}
         </div>
 
-        <button 
-          onClick={() => router.push('/student/dashboard')}
-          className="w-full bg-slate-100 text-slate-700 rounded-xl py-2.5 text-xs font-semibold hover:bg-slate-200 transition shadow-sm mt-6"
-        >
-          Return to Dashboard
-        </button>
+        {/* Sidebar Footer */}
+        <div className="p-6 border-t border-[#e2eae4] bg-white">
+          <button 
+            onClick={() => router.push('/student/dashboard')}
+            className="w-full bg-[#f4f7f4] text-[#112217] border border-[#e2eae4] rounded-2xl py-3 text-xs font-bold hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
+          >
+            Return to Dashboard
+          </button>
+        </div>
+
       </aside>
 
     </div>

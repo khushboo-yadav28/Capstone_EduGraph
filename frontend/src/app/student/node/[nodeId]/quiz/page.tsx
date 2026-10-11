@@ -2,28 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { fetchNodeQuestions, submitQuizScore, QuizAnswer } from '@/src/lib/api';
+import { fetchNodeQuestions, submitQuizScore, QuizAnswer, BatchQuizEvaluationResponse } from '@/src/lib/api';
 import { CheckCircle2, AlertCircle, ArrowRight, BookOpen, RotateCcw } from 'lucide-react';
-
-interface QuestionFeedback {
-  quiz_id: string | number;
-  question_text: string;
-  selected_option_index: number;
-  correct_option_index: number;
-  is_correct: boolean;
-  explanation: string;
-}
-
-interface BatchEvaluationResponse {
-  attempt_id?: string;
-  passed?: boolean;
-  is_passed?: boolean;
-  score_percentage: number;
-  total_questions: number;
-  correct_answers_count: number;
-  feedback?: QuestionFeedback[];
-  feedback_list?: QuestionFeedback[];
-}
 
 export default function NodeQuizPage() {
   const params = useParams();
@@ -32,7 +12,7 @@ export default function NodeQuizPage() {
 
   const [questions, setQuestions] = useState<any[]>([]);
   const [selectedAnswers, setSelectedAnswers] = useState<{ [key: string]: number }>({});
-  const [result, setResult] = useState<BatchEvaluationResponse | null>(null);
+  const [result, setResult] = useState<BatchQuizEvaluationResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -49,9 +29,8 @@ export default function NodeQuizPage() {
   };
 
   const handleSubmit = async () => {
-    // FIX: Map selected_option_index to Number explicitly
     const formattedAnswers: QuizAnswer[] = Object.entries(selectedAnswers).map(([qId, optIdx]) => ({
-      quiz_id: qId,
+      quiz_id: Number(qId),
       selected_option_index: Number(optIdx)
     }));
 
@@ -80,8 +59,8 @@ export default function NodeQuizPage() {
     );
   }
 
-  const feedbackItems = result?.feedback || result?.feedback_list || [];
-  const isPassed = result?.passed ?? result?.is_passed ?? false;
+  const feedbackItems = result?.feedback || [];
+  const isPassed = Boolean(result?.is_passed);
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 md:p-12 flex justify-center">
