@@ -216,3 +216,56 @@ def get_my_earned_badges(
         .all()
     )
     return badges
+
+from fastapi.responses import StreamingResponse
+from app.services.certificate_service import generate_course_certificate
+
+@router.get("/{course_id}/certificate/download")
+def download_course_certificate(
+    course_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.STUDENT]))
+):
+    """
+    Validates course completion and streams a secure, non-editable 
+    certificate PNG image containing the student's name and course title.
+    """
+    # Fetch enrollment joined with User and Course to pull names directly
+    enrollment = (
+        db.query(UserCourseEnrollment)
+        .options(
+            joinedload(UserCourseEnrollment.student),
+            joinedload(UserCourseEnrollment.course)
+        )
+        .filter(
+            UserCourseEnrollment.student_id == current_user.id,
+            UserCourseEnrollment.course_id == course_id
+        )
+        .first()
+    )
+
+    if not enrollment or enrollment.status != EnrollmentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Certificate is only available for fully completed courses."
+        )
+
+    student_name = enrollment.student.full_name if enrollment.student else current_user.full_name
+    course_title = enrollment.course.title if enrollment.course else "Edugraph Verified Course"
+
+    # Generate certificate image bytes stream
+    cert_buffer = generate_course_certificate(
+        student_name=student_name,
+        course_title=course_title,
+        completion_date=enrollment.completed_at or datetime.now(timezone.utc)
+    )
+
+    # Format download filename
+    safe_title = "".join(c for c in course_title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+    filename = f"Edugraph_Certificate_{safe_title}.png"
+
+    return StreamingResponse(
+        cert_buffer,
+        media_type="image/png",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
