@@ -304,6 +304,7 @@ def save_generated_graph_to_course(
         for quiz_dict in node_dict.get("quizzes", []):
             new_quiz = Quiz(
                 node_id=new_node.id,
+                set_number=quiz_dict.get("set_number", 1),
                 question_text=quiz_dict["question_text"],
                 options=quiz_dict["options"],
                 correct_option_index=quiz_dict["correct_option_index"],

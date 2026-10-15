@@ -13,7 +13,7 @@ from app.services.gemini_service import extract_course_graph_from_pdf
 from app.core.security import get_current_user, require_roles
 from app.schemas.node_graph import CourseGraphResponse,GraphNodeResponse,GraphEdgeResponse,NodeProgressStatus
 from app.models.quiz import QuizAttempt, StudentProgress
-from app.models.course import Category, Course, CourseStatus, Edge, Node
+from app.models.course import Category, Course, CourseStatus, Edge, Node, UserCourseEnrollment
 
 router = APIRouter(prefix="/courses", tags=["Courses & Graph"])
 
@@ -375,3 +375,72 @@ def update_instructor_course_graph_endpoint(
         current_user=current_user
     )
     return {"message": "Course graph updated successfully", "course_id": str(updated_course.id)}
+
+@router.get("/instructor/{course_id}/analytics", response_model=Dict[str, Any])
+def get_instructor_course_analytics(
+    course_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns heatmap analytics for an instructor showing student node clearance 
+    counts and percentages across all nodes in a course.
+    """
+    # 1. Verify Instructor Role and Course Ownership/Existence
+    if current_user.role not in [UserRole.INSTRUCTOR, UserRole.ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only instructors or admins can view course analytics."
+        )
+
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Course not found."
+        )
+
+    # 2. Get Total Enrolled Students Count for this Course
+    total_enrolled_students = db.query(func.count(UserCourseEnrollment.id)).filter(
+        UserCourseEnrollment.course_id == course_id
+    ).scalar() or 0
+
+    # 3. Fetch all nodes for this course
+    nodes = db.query(Node).filter(Node.course_id == course_id).all()
+    node_analytics = []
+
+    for node in nodes:
+        # Count how many unique students have marked this node as completed 
+        # (meaning they passed both Set 1 and Set 2 per your StudentProgress model)
+        cleared_students_count = db.query(func.count(StudentProgress.id)).filter(
+            StudentProgress.node_id == node.id,
+            StudentProgress.is_completed == True
+        ).scalar() or 0
+
+        # Calculate Clearance Percentage
+        clearance_percentage = (
+            round((cleared_students_count / total_enrolled_students) * 100.0, 2)
+            if total_enrolled_students > 0
+            else 0.0
+        )
+
+        # Determine Heatmap status based on your 60% rule
+        # >= 60% -> "GREEN" (performing well), < 60% -> "RED" (lacking / struggling)
+        heatmap_status = "GREEN" if clearance_percentage >= 60.0 else "RED"
+
+        node_analytics.append({
+            "node_id": str(node.id),
+            "node_key": node.node_key,
+            "title": node.title,
+            "total_enrolled": total_enrolled_students,
+            "cleared_students_count": cleared_students_count,
+            "clearance_percentage": clearance_percentage,
+            "heatmap_status": heatmap_status
+        })
+
+    return {
+        "course_id": str(course.id),
+        "course_title": course.title,
+        "total_enrolled_students": total_enrolled_students,
+        "nodes_analytics": node_analytics
+    }

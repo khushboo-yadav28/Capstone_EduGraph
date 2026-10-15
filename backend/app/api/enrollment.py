@@ -200,3 +200,19 @@ def update_enrollment_status(
     db.commit()
     db.refresh(enrollment)
     return enrollment
+
+@router.get("/badges/me", response_model=List[BadgeResponse])
+def get_my_earned_badges(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.STUDENT]))
+):
+    """
+    Retrieves all course completion badges earned by the authenticated student.
+    """
+    badges = (
+        db.query(Badge)
+        .join(UserCourseEnrollment, Badge.enrollment_id == UserCourseEnrollment.id)
+        .filter(UserCourseEnrollment.student_id == current_user.id)
+        .all()
+    )
+    return badges

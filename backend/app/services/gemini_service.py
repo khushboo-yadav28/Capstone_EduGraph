@@ -28,6 +28,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # ==========================================
 
 class GeminiQuizSchema(BaseModel):
+    set_number: int = Field(..., ge=1, le=2, description="The quiz set number: 1 for Quiz Set 1, 2 for Quiz Set 2.")
     question_text: str = Field(..., description="Clear multiple choice question testing node content.")
     options: List[str] = Field(
         ..., 
@@ -69,9 +70,13 @@ class GeminiNodeSchema(BaseModel):
     )
     quizzes: List[GeminiQuizSchema] = Field(
         ..., 
-        min_items=10, 
+        min_items=20, 
         max_items=20, 
-        description="Generate either 10 questions (1 quiz block) or 20 questions (2 quiz blocks of 10) per node as a multiple of 10."
+         description=(
+        "Exactly 20 quiz questions total. The first 10 questions must have "
+        "set_number=1. The next 10 questions must have set_number=2."
+    )
+        # description="Generate either 10 questions (1 quiz block) or 20 questions (2 quiz blocks of 10) per node as a multiple of 10."
     )
 
 
@@ -137,15 +142,28 @@ def extract_course_graph_from_pdf(
        - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
        - Set `youtube_url` and `youtube_timestamp_seconds` to NULL UNLESS an explicit YouTube link is written in the PDF text.
 
-    5. DYNAMIC QUESTION BANK (MULTIPLE OF 10 RULE):
-       - For each node, generate quizzes subject to strict limits:
-         * **Lower Limit**: 1 quiz per node containing exactly 10 questions.
-         * **Upper Limit**: 2 quizzes per node, where each quiz contains exactly 10 questions (totaling 20 questions for that node).
-       - Use 2 quizzes for larger/denser nodes, and 1 quiz for shorter/focused nodes.
-       - Each question MUST have exactly 4 options.
-       - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
-       - Vary difficulty across EASY, MEDIUM, and HARD, and provide thorough explanations for every answer.
+    5. MANDATORY DUAL-SET QUESTION BANK:
+   - Generate exactly 20 quiz objects for every node.
+   - The quizzes array MUST contain exactly 20 objects in this order:
+     * Array indexes 0-9: exactly 10 questions, each with set_number=1.
+     * Array indexes 10-19: exactly 10 questions, each with set_number=2.
+   - Do not assign set_number=1 to all 20 questions.
+   - Do not omit set_number from any question.
+   - Set 2 must contain its own 10 questions, not duplicate Set 1.
+   - Every question must contain exactly 4 options.
     """
+    
+    
+   
+    # 5. DYNAMIC QUESTION BANK (MULTIPLE OF 10 RULE):
+    #    - For each node, generate quizzes subject to strict limits:
+    #      * **Lower Limit**: 1 quiz per node containing exactly 10 questions.
+    #      * **Upper Limit**: 2 quizzes per node, where each quiz contains exactly 10 questions (totaling 20 questions for that node).
+    #    - Use 2 quizzes for larger/denser nodes, and 1 quiz for shorter/focused nodes.
+    #    - Each question MUST have exactly 4 options.
+    #    - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
+    #    - Vary difficulty across EASY, MEDIUM, and HARD, and provide thorough explanations for every answer.
+    
 
 
     
@@ -246,9 +264,13 @@ def extract_course_graph_from_pdf(
         start_time = time.perf_counter()
 
         print("Sending PDF content to Gemini for Knowledge Graph extraction...")
-        
+        print("Model:", GEMINI_PRIMARY_MODEL)
+        print("PDF bytes:", len(pdf_bytes))
+        print("MIME type:", mime_type)
+        print("PDF header:", repr(pdf_bytes[:8]))
         response = client.models.generate_content(
             model=GEMINI_PRIMARY_MODEL,
+            # model="gemini-3.5-flash-lite",
             contents=[
                 types.Part.from_bytes(data=pdf_bytes, mime_type=mime_type),
                 prompt
@@ -258,7 +280,7 @@ def extract_course_graph_from_pdf(
                 response_schema=CourseGraphExtractionSchema,
                 temperature=GEMINI_INGESTION_TEMPERATURE,
                 max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
-                thinking_config=types.ThinkingConfig(thinking_budget=0,include_thoughts=False)
+                # thinking_config=types.ThinkingConfig(thinking_budget=0,include_thoughts=False)
             )
         )
 
@@ -277,6 +299,30 @@ def extract_course_graph_from_pdf(
         )
         
         raw_data = json.loads(response.text)
+
+        
+        # Enforce exactly 10 questions in each set for every node.
+        for node in raw_data.get("nodes", []):
+            quizzes = node.get("quizzes", [])
+
+            if len(quizzes) != 20:
+                raise ValueError(
+                    f"Node '{node.get('node_key')}' must have exactly 20 quizzes; "
+                    f"Gemini returned {len(quizzes)}."
+                )
+
+            for index, quiz in enumerate(quizzes):
+                # First 10 questions -> Set 1; next 10 -> Set 2.
+                quiz["set_number"] = 1 if index < 10 else 2
+
+            # Log the distribution before saving to the database.
+            set_1_count = sum(q["set_number"] == 1 for q in quizzes)
+            set_2_count = sum(q["set_number"] == 2 for q in quizzes)
+
+            print(
+                f"Node {node.get('node_key')}: "
+                f"Set 1 = {set_1_count}, Set 2 = {set_2_count}"
+            )
         
         # --- Map Node Keys for Layout Utility ---
         # calculate_dag_layout expects nodes as dicts with "id" and edges as (source_id, target_id)
