@@ -1,13 +1,33 @@
+from contextlib import asynccontextmanager
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
+from sqlalchemy import text
+
 from app.database import Base, engine
-from app.api import quiz, enrollment, courses, auth  # <--- Make sure auth is imported
+import app.models
+from app.api import quiz, enrollment, courses, auth
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure all tables and required columns exist in PostgreSQL
+    try:
+        Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
+            conn.execute(text("ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
+        logging.info("Database schema synchronized successfully (quiz_attempts.set_number confirmed).")
+    except Exception as e:
+        logging.warning(f"Database schema auto-sync warning: {e}")
+    yield
+
 
 app = FastAPI(
     title="Graph LMS API",
     description="Knowledge Graph based Learning Management System",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS configuration
@@ -20,7 +40,7 @@ app.add_middleware(
 )
 
 # Register Routers
-app.include_router(auth.router)     # <--- Add this line to register auth endpoints
+app.include_router(auth.router)
 app.include_router(quiz.router)
 app.include_router(courses.router)
 app.include_router(enrollment.router)

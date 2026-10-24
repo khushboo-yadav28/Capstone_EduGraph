@@ -1,144 +1,177 @@
-# import os
-# from io import BytesIO
-# from datetime import datetime
-# from PIL import Image, ImageDraw, ImageFont
-
-# def generate_course_certificate(student_name: str, course_title: str, completion_date: datetime) -> BytesIO:
-#     """
-#     Generates a stylized certificate image dynamically embedding student name, 
-#     course title, and formatted completion date.
-#     """
-#     # 1. Create a blank certificate canvas (Landscape 1920x1080)
-#     width, height = 1920, 1080
-#     cert = Image.new("RGB", (width, height), color="#FBFBFB")
-#     draw = ImageDraw.Draw(cert)
-
-#     # 2. Draw Elegant Border & Background Styling
-#     # Outer dark border
-#     draw.rectangle([40, 40, width - 40, height - 40], outline="#1E293B", width=6)
-#     # Inner gold/accent border
-#     draw.rectangle([60, 60, width - 60, height - 60], outline="#D97706", width=2)
-
-#     # 3. Load Fonts (Falling back to default if custom ttf is missing)
-#     try:
-#         # You can place a professional .ttf font file in your backend/assets folder
-#         font_title = ImageFont.truetype("arial.ttf", 64)
-#         font_subtitle = ImageFont.truetype("arial.ttf", 32)
-#         font_name = ImageFont.truetype("arial.ttf", 80)
-#         font_body = ImageFont.truetype("arial.ttf", 28)
-#         font_date = ImageFont.truetype("arial.ttf", 30)
-#     except IOError:
-#         font_title = ImageFont.load_default()
-#         font_subtitle = ImageFont.load_default()
-#         font_name = ImageFont.load_default()
-#         font_body = ImageFont.load_default()
-#         font_date = ImageFont.load_default()
-
-#     # 4. Draw Header / Platform Branding
-#     draw.text((width / 2, 140), "EDUGRAPH LEARNING ECOSYSTEM", fill="#64748B", anchor="mm", font=font_subtitle)
-#     draw.text((width / 2, 230), "CERTIFICATE OF COMPLETION", fill="#1E293B", anchor="mm", font=font_title)
-
-#     # 5. Body Text
-#     draw.text((width / 2, 370), "This is proudly presented to", fill="#475569", anchor="mm", font=font_body)
-
-#     # 6. Student Name (Highlighted / Bold styling simulation)
-#     draw.text((width / 2, 480), student_name.upper(), fill="#0F172A", anchor="mm", font=font_name)
-    
-#     # Underline for student name
-#     name_bbox = draw.textbbox((width / 2, 480), student_name.upper(), font=font_name, anchor="mm")
-#     draw.line([name_bbox[0] - 40, name_bbox[3] + 15, name_bbox[2] + 40, name_bbox[3] + 15], fill="#D97706", width=4)
-
-#     # 7. Course Details
-#     draw.text((width / 2, 630), "for successfully mastering and completing the curriculum requirements for", fill="#475569", anchor="mm", font=font_body)
-#     draw.text((width / 2, 720), course_title, fill="#2563EB", anchor="mm", font=font_subtitle)
-
-#     # 8. Footer Section (Date & Verification Metadata)
-#     formatted_date = completion_date.strftime("%B %d, %Y")
-    
-#     # Left side: Issue Date
-#     draw.text((350, 900), f"Date Issued: {formatted_date}", fill="#334155", anchor="lm", font=font_date)
-#     draw.line([350, 870, 650, 870], fill="#94A3B8", width=2)
-#     draw.text((350, 940), "Authorized Signature", fill="#64748B", anchor="lm", font=font_body)
-
-#     # Right side: Verification Badge text
-#     draw.text((width - 350, 900), "Verified Secure Credential", fill="#16A34A", anchor="rm", font=font_date)
-#     draw.line([width - 650, 870, width - 350, 870], fill="#94A3B8", width=2)
-#     draw.text((width - 350, 940), "Edugraph Academic Authority", fill="#64748B", anchor="rm", font=font_body)
-
-#     # 9. Save image into a binary stream buffer
-#     buffer = BytesIO()
-#     cert.save(buffer, format="PNG")
-#     buffer.seek(0)
-#     return buffer
-
 import os
 from io import BytesIO
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
+from typing import Optional
+import pymupdf
 
-def generate_course_certificate(student_name: str, course_title: str, completion_date: datetime) -> BytesIO:
+
+def generate_course_certificate(
+    student_name: str,
+    course_title: str,
+    completion_date: datetime,
+    certificate_id: Optional[str] = None,
+    output_format: str = "png"
+) -> BytesIO:
     """
-    Generates a stylized certificate image dynamically embedding student name, 
-    course title, formatted completion date, and an institutional signature block.
+    Generates an official, non-editable verified Certificate of Completion
+    rendered natively via PyMuPDF as a high-resolution PNG image or vector PDF.
     """
-    # 1. Create a blank certificate canvas (Landscape 1920x1080)
-    width, height = 1920, 1080
-    cert = Image.new("RGB", (width, height), color="#FBFBFB")
-    draw = ImageDraw.Draw(cert)
+    width = 1920
+    height = 1080
 
-    # 2. Draw Elegant Border & Background Styling
-    draw.rectangle([40, 40, width - 40, height - 40], outline="#1E293B", width=6)
-    draw.rectangle([60, 60, width - 60, height - 60], outline="#D97706", width=2)
+    doc = pymupdf.open()
+    page = doc.new_page(width=width, height=height)
 
-    # 3. Load Fonts (Falling back to default if custom ttf is missing)
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 64)
-        font_subtitle = ImageFont.truetype("arial.ttf", 32)
-        font_name = ImageFont.truetype("arial.ttf", 80)
-        font_body = ImageFont.truetype("arial.ttf", 28)
-        font_date = ImageFont.truetype("arial.ttf", 30)
-        font_sig = ImageFont.truetype("arial.ttf", 36) # For signature simulation
-    except IOError:
-        font_title = ImageFont.load_default()
-        font_subtitle = ImageFont.load_default()
-        font_name = ImageFont.load_default()
-        font_body = ImageFont.load_default()
-        font_date = ImageFont.load_default()
-        font_sig = ImageFont.load_default()
+    # Color definitions (normalized 0.0 - 1.0 for PyMuPDF)
+    NAVY = (17 / 255, 34 / 255, 23 / 255)        # #112217 - EduGraph Primary Dark
+    GOLD = (212 / 255, 175 / 255, 55 / 255)      # #D4AF37 - Prestige Gold
+    SAGE = (46 / 255, 90 / 255, 68 / 255)        # #2E5A44 - Sage Green Accent
+    MUTED = (74 / 255, 107 / 255, 93 / 255)      # #4A6B5D - Muted Green Slate
+    DARK_TEXT = (20 / 255, 30 / 255, 25 / 255)   # #141E19 - Deep Text
+    BG_CREAM = (251 / 255, 252 / 255, 251 / 255) # #FBFBFB - Subtle Cream Background
 
-    # 4. Draw Header / Platform Branding
-    draw.text((width / 2, 140), "EDUGRAPH LEARNING ECOSYSTEM", fill="#64748B", anchor="mm", font=font_subtitle)
-    draw.text((width / 2, 230), "CERTIFICATE OF COMPLETION", fill="#1E293B", anchor="mm", font=font_title)
+    # 1. Background Fill
+    page.draw_rect(pymupdf.Rect(0, 0, width, height), color=None, fill=BG_CREAM)
 
-    # 5. Body Text
-    draw.text((width / 2, 370), "This is proudly presented to", fill="#475569", anchor="mm", font=font_body)
+    # 2. Outer & Inner Ornamental Borders
+    page.draw_rect(pymupdf.Rect(40, 40, width - 40, height - 40), color=NAVY, width=8)
+    page.draw_rect(pymupdf.Rect(58, 58, width - 58, height - 58), color=GOLD, width=3)
+    page.draw_rect(pymupdf.Rect(72, 72, width - 72, height - 72), color=NAVY, width=1)
 
-    # 6. Student Name
-    draw.text((width / 2, 480), student_name.upper(), fill="#0F172A", anchor="mm", font=font_name)
-    
-    name_bbox = draw.textbbox((width / 2, 480), student_name.upper(), font=font_name, anchor="mm")
-    draw.line([name_bbox[0] - 40, name_bbox[3] + 15, name_bbox[2] + 40, name_bbox[3] + 15], fill="#D97706", width=4)
+    # Corner Accents (Decorative Gold Squares)
+    corner_size = 36
+    corners = [
+        (40, 40),
+        (width - 40 - corner_size, 40),
+        (40, height - 40 - corner_size),
+        (width - 40 - corner_size, height - 40 - corner_size)
+    ]
+    for cx, cy in corners:
+        page.draw_rect(pymupdf.Rect(cx, cy, cx + corner_size, cy + corner_size), color=GOLD, fill=GOLD)
 
-    # 7. Course Details
-    draw.text((width / 2, 630), "for successfully mastering and completing the curriculum requirements for", fill="#475569", anchor="mm", font=font_body)
-    draw.text((width / 2, 720), course_title, fill="#2563EB", anchor="mm", font=font_subtitle)
+    # 3. Header & Institution Branding
+    page.insert_textbox(
+        pymupdf.Rect(100, 110, width - 100, 160),
+        "EDUGRAPH KNOWLEDGE GRAPH ADAPTIVE PLATFORM",
+        fontsize=22,
+        fontname="hebo",
+        color=MUTED,
+        align=1
+    )
 
-    # 8. Footer Section (Date & Authorized Signature Block)
-    formatted_date = completion_date.strftime("%B %d, %Y")
-    
-    # Left side: Issue Date
-    draw.text((350, 900), f"Date Issued: {formatted_date}", fill="#334155", anchor="lm", font=font_date)
-    draw.line([350, 870, 650, 870], fill="#94A3B8", width=2)
-    draw.text((350, 940), "Date of Issuance", fill="#64748B", anchor="lm", font=font_body)
+    page.insert_textbox(
+        pymupdf.Rect(100, 160, width - 100, 270),
+        "CERTIFICATE OF COMPLETION",
+        fontsize=56,
+        fontname="hebo",
+        color=NAVY,
+        align=1
+    )
 
-    # Right side: Authorized Signature block with a simulated sign
-    draw.text((width - 500, 845), "Dr. A. Vance", fill="#1E3A8A", anchor="lm", font=font_sig) # Simulated signature text
-    draw.line([width - 650, 870, width - 350, 870], fill="#94A3B8", width=2)
-    draw.text((width - 500, 910), "Chief Academic Officer", fill="#1E293B", anchor="lm", font=font_date)
-    draw.text((width - 500, 945), "Edugraph Authorized Signatory", fill="#64748B", anchor="lm", font=font_body)
+    # Subtle Gold divider line under header
+    page.draw_line(pymupdf.Point(width / 2 - 250, 280), pymupdf.Point(width / 2 + 250, 280), color=GOLD, width=2)
 
-    # 9. Save image into a binary stream buffer
+    # 4. Presentation Subtitle
+    page.insert_textbox(
+        pymupdf.Rect(100, 310, width - 100, 370),
+        "THIS IS PROUDLY PRESENTED TO",
+        fontsize=20,
+        fontname="helv",
+        color=MUTED,
+        align=1
+    )
+
+    # 5. Student Name (Hero Element)
+    clean_student_name = student_name.strip().upper() if student_name else "VALUED SCHOLAR"
+    page.insert_textbox(
+        pymupdf.Rect(120, 380, width - 120, 490),
+        clean_student_name,
+        fontsize=64,
+        fontname="hebo",
+        color=DARK_TEXT,
+        align=1
+    )
+
+    # Underline accent for student name
+    page.draw_line(pymupdf.Point(width / 2 - 380, 500), pymupdf.Point(width / 2 + 380, 500), color=GOLD, width=4)
+
+    # 6. Curriculum Mastery Statement
+    page.insert_textbox(
+        pymupdf.Rect(160, 530, width - 160, 600),
+        "for successfully demonstrating 100% mastery across all adaptive knowledge graph nodes,\n"
+        "prerequisite learning dependencies, and dynamic evaluation benchmarks for the curriculum:",
+        fontsize=20,
+        fontname="helv",
+        color=MUTED,
+        align=1
+    )
+
+    # 7. Course Title (Prominent Sage Green)
+    clean_course_title = course_title.strip() if course_title else "Adaptive Knowledge Graph Curriculum"
+    page.insert_textbox(
+        pymupdf.Rect(140, 610, width - 140, 720),
+        clean_course_title,
+        fontsize=44,
+        fontname="hebo",
+        color=SAGE,
+        align=1
+    )
+
+    # 8. Footer Section: Left (Date & Credential ID), Center (Seal), Right (Signatures)
+    formatted_date = completion_date.strftime("%B %d, %Y") if isinstance(completion_date, datetime) else str(completion_date)
+    cred_id = certificate_id or f"EDG-CERT-{int(completion_date.timestamp()) if hasattr(completion_date, 'timestamp') else '2026'}"
+
+    # Left: Issuance details
+    page.draw_line(pymupdf.Point(180, 890), pymupdf.Point(580, 890), color=MUTED, width=1.5)
+    page.insert_textbox(
+        pymupdf.Rect(180, 905, 580, 990),
+        f"Date of Issuance: {formatted_date}\nVerification ID: {cred_id}",
+        fontsize=16,
+        fontname="helv",
+        color=DARK_TEXT,
+        align=0  # Left aligned
+    )
+
+    # Center: Verified Credential Badge Seal
+    center_x = width / 2
+    seal_y = 880
+    page.draw_rect(pymupdf.Rect(center_x - 140, seal_y - 45, center_x + 140, seal_y + 45), color=GOLD, fill=NAVY, width=2)
+    page.insert_textbox(
+        pymupdf.Rect(center_x - 135, seal_y - 35, center_x + 135, seal_y + 35),
+        "VERIFIED CREDENTIAL\n100% GRAPH MASTERY",
+        fontsize=13,
+        fontname="hebo",
+        color=GOLD,
+        align=1
+    )
+
+    # Right: Institutional Authority & Signatory
+    page.insert_textbox(
+        pymupdf.Rect(width - 580, 830, width - 180, 885),
+        "Dr. A. Vance",
+        fontsize=32,
+        fontname="heit",
+        color=NAVY,
+        align=2  # Right aligned
+    )
+    page.draw_line(pymupdf.Point(width - 580, 890), pymupdf.Point(width - 180, 890), color=MUTED, width=1.5)
+    page.insert_textbox(
+        pymupdf.Rect(width - 580, 905, width - 180, 990),
+        "Chief Academic Officer\nEduGraph Academic & Verification Authority",
+        fontsize=16,
+        fontname="helv",
+        color=DARK_TEXT,
+        align=2  # Right aligned
+    )
+
+    # 9. Output Stream Buffer
     buffer = BytesIO()
-    cert.save(buffer, format="PNG")
+    if output_format.lower() == "pdf":
+        buffer.write(doc.tobytes())
+    else:
+        pix = page.get_pixmap(dpi=150)
+        buffer.write(pix.tobytes("png"))
+
+    doc.close()
     buffer.seek(0)
     return buffer

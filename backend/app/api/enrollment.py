@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -15,6 +16,8 @@ from app.schemas.enrollment import (
     BadgeResponse,
 )
 from app.core.security import get_current_user, require_roles
+from app.services.certificate_service import generate_course_certificate
+from app.services.enrollment_service import update_course_progress_and_badge
 
 router = APIRouter(prefix="/enrollments", tags=["Enrollments & Badges"])
 
@@ -22,44 +25,10 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments & Badges"])
 def update_and_calculate_course_progress(db: Session, enrollment: UserCourseEnrollment) -> float:
     """
     Calculates overall course completion percentage and handles badge issuance if 100% completed.
+    Delegates to the canonical enrollment_service engine.
     """
-    total_nodes = db.query(Node).filter(Node.course_id == enrollment.course_id).count()
-    if total_nodes == 0:
-        return 0.0
-
-    node_ids = [n.id for n in db.query(Node.id).filter(Node.course_id == enrollment.course_id).all()]
-
-    completed_nodes_count = db.query(StudentProgress).filter(
-        StudentProgress.student_id == enrollment.student_id,
-        StudentProgress.node_id.in_(node_ids),
-        StudentProgress.is_completed == True
-    ).count()
-
-    progress_pct = round((completed_nodes_count / total_nodes) * 100.0, 2)
-    enrollment.progress_percentage = progress_pct
-
-    # Auto-complete enrollment and issue badge when 100% complete
-    if progress_pct >= 100.0 and enrollment.status != EnrollmentStatus.COMPLETED:
-        enrollment.status = EnrollmentStatus.COMPLETED
-        enrollment.completed_at = datetime.now(timezone.utc)
-
-        # Issue Badge if not already created
-        existing_badge = db.query(Badge).filter(Badge.enrollment_id == enrollment.id).first()
-        if not existing_badge:
-            course = db.query(Course).filter(Course.id == enrollment.course_id).first()
-            badge_title = f"Master of {course.title}" if course else "Course Completion Badge"
-            
-            new_badge = Badge(
-                id=uuid4(),
-                enrollment_id=enrollment.id,
-                badge_title=badge_title,
-                issued_at=datetime.now(timezone.utc)
-            )
-            db.add(new_badge)
-
-    db.commit()
-    db.refresh(enrollment)
-    return progress_pct
+    updated = update_course_progress_and_badge(db, enrollment.student_id, enrollment.course_id)
+    return updated.progress_percentage
 
 
 @router.post("/", response_model=UserCourseEnrollmentResponse, status_code=status.HTTP_201_CREATED)
@@ -138,13 +107,15 @@ def get_my_enrollments(
     """
     Returns all courses the current user is enrolled in, updated with real-time completion progress.
     """
-    # enrollments = db.query(UserCourseEnrollment).filter(
-    #     UserCourseEnrollment.student_id == current_user.id
-    # ).all()
-    enrollments = db.query(UserCourseEnrollment)\
-        .options(joinedload(UserCourseEnrollment.course))\
-        .filter(UserCourseEnrollment.student_id == current_user.id)\
+    enrollments = (
+        db.query(UserCourseEnrollment)
+        .options(
+            joinedload(UserCourseEnrollment.course),
+            joinedload(UserCourseEnrollment.badge)
+        )
+        .filter(UserCourseEnrollment.student_id == current_user.id)
         .all()
+    )
 
     for enrollment in enrollments:
         update_and_calculate_course_progress(db, enrollment)
@@ -161,10 +132,18 @@ def get_enrollment_by_course(
     """
     Fetches enrollment details and progress status for a specific course.
     """
-    enrollment = db.query(UserCourseEnrollment).filter(
-        UserCourseEnrollment.student_id == current_user.id,
-        UserCourseEnrollment.course_id == course_id
-    ).first()
+    enrollment = (
+        db.query(UserCourseEnrollment)
+        .options(
+            joinedload(UserCourseEnrollment.course),
+            joinedload(UserCourseEnrollment.badge)
+        )
+        .filter(
+            UserCourseEnrollment.student_id == current_user.id,
+            UserCourseEnrollment.course_id == course_id
+        )
+        .first()
+    )
 
     if not enrollment:
         raise HTTPException(
@@ -201,6 +180,7 @@ def update_enrollment_status(
     db.refresh(enrollment)
     return enrollment
 
+
 @router.get("/badges/me", response_model=List[BadgeResponse])
 def get_my_earned_badges(
     db: Session = Depends(get_db),
@@ -208,17 +188,40 @@ def get_my_earned_badges(
 ):
     """
     Retrieves all course completion badges earned by the authenticated student.
+    Populates course_id, course_title, and certificate download URL.
     """
     badges = (
         db.query(Badge)
         .join(UserCourseEnrollment, Badge.enrollment_id == UserCourseEnrollment.id)
+        .options(
+            joinedload(Badge.enrollment).joinedload(UserCourseEnrollment.course)
+        )
         .filter(UserCourseEnrollment.student_id == current_user.id)
+        .order_by(Badge.issued_at.desc())
         .all()
     )
-    return badges
 
-from fastapi.responses import StreamingResponse
-from app.services.certificate_service import generate_course_certificate
+    response_badges: List[BadgeResponse] = []
+    for badge in badges:
+        course_id = badge.enrollment.course_id if badge.enrollment else None
+        course_title = badge.enrollment.course.title if (badge.enrollment and badge.enrollment.course) else None
+        cert_url = f"/enrollments/{course_id}/certificate/download" if course_id else None
+
+        response_badges.append(
+            BadgeResponse(
+                id=badge.id,
+                enrollment_id=badge.enrollment_id,
+                course_id=course_id,
+                course_title=course_title,
+                badge_title=badge.badge_title,
+                badge_image_url=badge.badge_image_url or "/default-badge.png",
+                certificate_url=cert_url,
+                issued_at=badge.issued_at
+            )
+        )
+
+    return response_badges
+
 
 @router.get("/{course_id}/certificate/download")
 def download_course_certificate(
@@ -227,15 +230,25 @@ def download_course_certificate(
     current_user: User = Depends(require_roles([UserRole.STUDENT]))
 ):
     """
-    Validates course completion and streams a secure, non-editable 
+    Validates 100% course completion and streams an official, verified 
     certificate PNG image containing the student's name and course title.
     """
-    # Fetch enrollment joined with User and Course to pull names directly
-    enrollment = (
+    # 1. Update and verify real-time completion state
+    enrollment = update_course_progress_and_badge(db, current_user.id, course_id)
+
+    if not enrollment or enrollment.status != EnrollmentStatus.COMPLETED or enrollment.progress_percentage < 100.0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Certificate is only available for fully completed courses (100% progress required)."
+        )
+
+    # 2. Fetch full relations for names and certificate ID
+    enrollment_with_relations = (
         db.query(UserCourseEnrollment)
         .options(
             joinedload(UserCourseEnrollment.student),
-            joinedload(UserCourseEnrollment.course)
+            joinedload(UserCourseEnrollment.course),
+            joinedload(UserCourseEnrollment.badge)
         )
         .filter(
             UserCourseEnrollment.student_id == current_user.id,
@@ -244,28 +257,39 @@ def download_course_certificate(
         .first()
     )
 
-    if not enrollment or enrollment.status != EnrollmentStatus.COMPLETED:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Certificate is only available for fully completed courses."
-        )
+    student_name = (
+        enrollment_with_relations.student.full_name
+        if enrollment_with_relations and enrollment_with_relations.student and enrollment_with_relations.student.full_name
+        else current_user.full_name
+    ) or "Valued Scholar"
 
-    student_name = enrollment.student.full_name if enrollment.student else current_user.full_name
-    course_title = enrollment.course.title if enrollment.course else "Edugraph Verified Course"
+    course_title = (
+        enrollment_with_relations.course.title
+        if enrollment_with_relations and enrollment_with_relations.course and enrollment_with_relations.course.title
+        else "EduGraph Verified Course"
+    )
 
-    # Generate certificate image bytes stream
+    badge_id_str = str(enrollment_with_relations.badge.id) if (enrollment_with_relations and enrollment_with_relations.badge) else None
+    cert_id = f"EDG-CERT-{badge_id_str[:8].upper()}" if badge_id_str else None
+
+    # 3. Generate certificate image stream
     cert_buffer = generate_course_certificate(
         student_name=student_name,
         course_title=course_title,
-        completion_date=enrollment.completed_at or datetime.now(timezone.utc)
+        completion_date=enrollment.completed_at or datetime.now(timezone.utc),
+        certificate_id=cert_id,
+        output_format="png"
     )
 
     # Format download filename
     safe_title = "".join(c for c in course_title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
-    filename = f"Edugraph_Certificate_{safe_title}.png"
+    filename = f"EduGraph_Certificate_{safe_title}.png"
 
     return StreamingResponse(
         cert_buffer,
         media_type="image/png",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
     )

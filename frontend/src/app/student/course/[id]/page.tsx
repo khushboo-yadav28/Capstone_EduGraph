@@ -12,7 +12,8 @@ import ReactFlow, {
   useEdgesState,
   MarkerType,
   Node,
-  Edge
+  Edge,
+  NodeResizer
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { 
@@ -32,7 +33,11 @@ import {
   Sliders,
   ChevronDown,
   Loader2,
-  FileText
+  FileText,
+  ChevronLeft,
+  ChevronRight,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -54,9 +59,9 @@ import {
 } from '@/src/lib/api';
 
 // ---------------------------------------------------------------------------
-// Custom Node Component (Sage Green & Cream Design System)
+// Custom Node Component with Resizable Support
 // ---------------------------------------------------------------------------
-const ConceptNode = ({ data }: { data: any }) => {
+const ConceptNode = ({ data, selected }: { data: any; selected: boolean }) => {
   const isCompleted = data.status === 'COMPLETED' || data.is_completed;
   const isUnlocked = data.status === 'UNLOCKED' || data.is_unlocked;
 
@@ -78,7 +83,14 @@ const ConceptNode = ({ data }: { data: any }) => {
   }
 
   return (
-    <div className={`px-4 py-3 rounded-2xl border-2 w-auto max-w-[270px] min-w-[210px] transition-all cursor-pointer ${bgStyles}`}>
+    <div className={`px-4 py-3 rounded-2xl border-2 w-full h-full flex flex-col justify-between transition-all cursor-pointer ${bgStyles}`}>
+      <NodeResizer 
+        color="#2e5a44" 
+        isVisible={selected} 
+        minWidth={210} 
+        minHeight={90} 
+      />
+
       <Handle type="target" position={Position.Top} className="!bg-[#4a6b5d] !w-2.5 !h-2.5" />
       
       <div className="flex items-start gap-2.5 mb-2">
@@ -131,6 +143,10 @@ export default function StudentCourseWorkspace() {
   // Active Tab in Sidebar Inspector
   const [activeTab, setActiveTab] = useState<'content' | 'quiz'>('content');
 
+  // Minimization States
+  const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
+  const [isCanvasMinimized, setIsCanvasMinimized] = useState(false);
+
   // Quiz States (Supporting Set 1 and Set 2)
   const [activeQuizSet, setActiveQuizSet] = useState<number>(1);
   const [quizzes, setQuizzes] = useState<QuizQuestion[]>([]);
@@ -170,11 +186,9 @@ export default function StudentCourseWorkspace() {
         setEnrollment(enrollRes.value || null);
       }
 
-      // Format Nodes and Edges for ReactFlow
       let rawNodes = rawGraph?.nodes || [];
       let rawEdges = rawGraph?.edges || [];
 
-      // Fallback Mock Nodes if database course has no nodes yet
       if (rawNodes.length === 0) {
         rawNodes = [
           {
@@ -214,13 +228,11 @@ export default function StudentCourseWorkspace() {
         ];
       }
 
-      // Map node_key to id
       const keyToIdMap = new Map<string, string>();
       rawNodes.forEach((n) => {
         if (n.node_key) keyToIdMap.set(n.node_key, String(n.id));
       });
 
-      // Progress lookup map
       const progMap = new Map<string, StudentProgressRecord>();
       if (progressRes.status === 'fulfilled' && progressRes.value) {
         progressRes.value.forEach((p) => progMap.set(String(p.node_id), p));
@@ -282,7 +294,6 @@ export default function StudentCourseWorkspace() {
       setNodes(formattedNodes);
       setEdges(formattedEdges);
 
-      // Auto-select first unlocked node if nothing selected yet
       if (!selectedNodeData && formattedNodes.length > 0) {
         const firstUnlocked = formattedNodes.find((n) => n.data.is_unlocked) || formattedNodes[0];
         setSelectedNodeData(firstUnlocked.data);
@@ -317,7 +328,6 @@ export default function StudentCourseWorkspace() {
     }
   }, []);
 
-  // When selected node or quiz set changes, fetch questions if unlocked
   useEffect(() => {
     if (selectedNodeData && (selectedNodeData.is_unlocked || selectedNodeData.status === 'COMPLETED')) {
       loadQuestionsForNode(selectedNodeData.id, activeQuizSet);
@@ -326,7 +336,6 @@ export default function StudentCourseWorkspace() {
     }
   }, [selectedNodeData?.id, activeQuizSet, loadQuestionsForNode]);
 
-  // Handle Node Click on Graph
   const onNodeClick = (_event: React.MouseEvent, node: Node) => {
     setSelectedNodeData(node.data);
     setQuizResult(null);
@@ -356,8 +365,6 @@ export default function StudentCourseWorkspace() {
       });
 
       setQuizResult(response);
-
-      // Re-sync live graph and progress
       await fetchGraphAndProgress();
     } catch (err: any) {
       console.error('Quiz submission error:', err);
@@ -367,7 +374,7 @@ export default function StudentCourseWorkspace() {
     }
   };
 
-  // 4. Handle Enrollment Status Update (PATCH /enrollments/{enrollment_id}/status)
+  // 4. Handle Enrollment Status Update
   const handleStatusUpdate = async (newStatus: EnrollmentStatus) => {
     if (!enrollment?.id) {
       alert('No active enrollment record found to update.');
@@ -386,7 +393,6 @@ export default function StudentCourseWorkspace() {
     }
   };
 
-  // Helper for Youtube Embed URL
   const getEmbedYoutubeUrl = (url?: string, timestamp?: number) => {
     if (!url) return null;
     let videoId = '';
@@ -400,7 +406,6 @@ export default function StudentCourseWorkspace() {
     return `https://www.youtube.com/embed/${videoId}${startParam}`;
   };
 
-  // Calculate overall course progress percentage
   const completedNodesCount = nodes.filter((n) => n.data?.status === 'COMPLETED').length;
   const totalNodesCount = nodes.length || 1;
   const calculatedProgress = enrollment?.progress_percentage ?? Math.round((completedNodesCount / totalNodesCount) * 100);
@@ -408,152 +413,160 @@ export default function StudentCourseWorkspace() {
   return (
     <div className="flex h-screen w-full bg-[#f4f7f4] text-[#1e2923] overflow-hidden selection:bg-[#2e5a44] selection:text-white">
       
-      {/* Main Viewport & Canvas Area */}
-      <div className="flex-1 flex flex-col h-full relative">
+      {/* Main Viewport & Canvas Area (Minimizable Canvas) */}
+      <div className={`flex flex-col h-full relative transition-all duration-300 ${
+        isCanvasMinimized ? 'w-20' : isSidebarMinimized ? 'flex-1' : 'flex-1'
+      }`}>
         
         {/* Workspace Top Header */}
-        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between z-10 shadow-sm">
-          <div className="flex items-center gap-4">
+        <header className="h-20 bg-white border-b border-[#e2eae4] px-6 flex items-center justify-between z-10 shadow-sm">
+          <div className="flex items-center gap-3">
             <button 
               onClick={() => router.push('/student/dashboard')}
               className="p-2.5 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] text-[#112217] hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
-              title="Return to Student Dashboard"
+              title="Return to Dashboard"
             >
               <ArrowLeft size={16} />
             </button>
-            <div>
-              <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44] flex items-center gap-1.5">
-                <Network size={12} /> Interactive Learning Graph
-              </span>
-              <h2 className="text-base font-black text-[#112217] truncate max-w-md">
-                {courseTitle}
-              </h2>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            {/* Enrollment Status Manager Pill (PATCH /enrollments/{enrollment_id}/status) */}
-            {enrollment && (
-              <div className="relative">
-                <button
-                  onClick={() => setStatusMenuOpen(!statusMenuOpen)}
-                  disabled={updatingStatus}
-                  className="px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-2 bg-[#fbfcfb] border-[#e2eae4] text-[#112217] hover:bg-[#f4f7f4] transition shadow-sm cursor-pointer"
-                >
-                  <span className={`w-2 h-2 rounded-full ${
-                    enrollment.status === 'COMPLETED' ? 'bg-[#2e5a44]' :
-                    enrollment.status === 'DROPPED' ? 'bg-rose-500' : 'bg-amber-500'
-                  }`} />
-                  <span>Status: {enrollment.status}</span>
-                  <ChevronDown size={14} className="text-slate-400" />
-                </button>
-
-                {statusMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white border border-[#e2eae4] rounded-2xl shadow-xl p-2 z-50 space-y-1">
-                    <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] px-3 py-1 block">
-                      Update Progress Status
-                    </span>
-                    {(['IN_PROGRESS', 'COMPLETED', 'DROPPED'] as EnrollmentStatus[]).map((st) => (
-                      <button
-                        key={st}
-                        onClick={() => handleStatusUpdate(st)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                          enrollment.status === st
-                            ? 'bg-[#d3efdc] text-[#112217]'
-                            : 'text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217]'
-                        }`}
-                      >
-                        <span>{st}</span>
-                        {enrollment.status === st && <CheckCircle2 size={13} className="text-[#2e5a44]" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Overall Course Progress Badge */}
-            <div className="flex items-center gap-2.5 bg-[#d3efdc]/50 border border-[#bce8c9] px-4 py-2 rounded-2xl shadow-sm">
-              <span className="text-xs font-black text-[#112217]">
-                {calculatedProgress}%
-              </span>
-              <div className="w-16 bg-[#e2eae4] h-2 rounded-full overflow-hidden">
-                <div 
-                  className="bg-[#2e5a44] h-full rounded-full transition-all duration-500" 
-                  style={{ width: `${calculatedProgress}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Issued Badge Preview */}
-            {enrollment?.badge && (
-              <span 
-                className="p-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-sm"
-                title={`Badge Earned: ${enrollment.badge.badge_title}`}
-              >
-                <Award size={15} className="text-amber-600" />
-                <span className="hidden sm:inline">Certified</span>
-              </span>
-            )}
-
+            {/* Canvas Minimize / Expand Toggle */}
             <button 
-              onClick={fetchGraphAndProgress}
-              className="p-2.5 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:text-[#112217] hover:bg-[#d3efdc]/30 transition shadow-sm cursor-pointer"
-              title="Sync Graph Data"
+              onClick={() => setIsCanvasMinimized(!isCanvasMinimized)}
+              className="p-2.5 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:text-[#112217] hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
+              title={isCanvasMinimized ? "Expand Knowledge Graph Canvas" : "Minimize Knowledge Graph Canvas"}
             >
-              <RefreshCw size={15} className={loadingGraph ? 'animate-spin' : ''} />
+              {isCanvasMinimized ? <Maximize2 size={16} /> : <Minimize2 size={16} />}
             </button>
+
+            {!isCanvasMinimized && (
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44] flex items-center gap-1.5">
+                  <Network size={12} /> Interactive Learning Graph
+                </span>
+                <h2 className="text-base font-black text-[#112217] truncate max-w-sm">
+                  {courseTitle}
+                </h2>
+              </div>
+            )}
           </div>
+
+          {!isCanvasMinimized && (
+            <div className="flex items-center gap-3">
+              {enrollment && (
+                <div className="relative">
+                  <button
+                    onClick={() => setStatusMenuOpen(!statusMenuOpen)}
+                    disabled={updatingStatus}
+                    className="px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-2 bg-[#fbfcfb] border-[#e2eae4] text-[#112217] hover:bg-[#f4f7f4] transition shadow-sm cursor-pointer"
+                  >
+                    <span className={`w-2 h-2 rounded-full ${
+                      enrollment.status === 'COMPLETED' ? 'bg-[#2e5a44]' :
+                      enrollment.status === 'DROPPED' ? 'bg-rose-500' : 'bg-amber-500'
+                    }`} />
+                    <span>Status: {enrollment.status}</span>
+                    <ChevronDown size={14} className="text-slate-400" />
+                  </button>
+
+                  {statusMenuOpen && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white border border-[#e2eae4] rounded-2xl shadow-xl p-2 z-50 space-y-1">
+                      <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] px-3 py-1 block">
+                        Update Progress Status
+                      </span>
+                      {(['IN_PROGRESS', 'COMPLETED', 'DROPPED'] as EnrollmentStatus[]).map((st) => (
+                        <button
+                          key={st}
+                          onClick={() => handleStatusUpdate(st)}
+                          className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer ${
+                            enrollment.status === st ? 'bg-[#d3efdc] text-[#112217]' : 'text-[#4a6b5d] hover:bg-[#f4f7f4]'
+                          }`}
+                        >
+                          <span>{st}</span>
+                          {enrollment.status === st && <CheckCircle2 size={13} className="text-[#2e5a44]" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2.5 bg-[#d3efdc]/50 border border-[#bce8c9] px-4 py-2 rounded-2xl shadow-sm">
+                <span className="text-xs font-black text-[#112217]">{calculatedProgress}%</span>
+                <div className="w-16 bg-[#e2eae4] h-2 rounded-full overflow-hidden">
+                  <div className="bg-[#2e5a44] h-full rounded-full transition-all duration-500" style={{ width: `${calculatedProgress}%` }} />
+                </div>
+              </div>
+            </div>
+          )}
         </header>
 
-        {/* ReactFlow Interactive Graph */}
-        <div className="flex-1 w-full h-full bg-[#f4f7f4]">
-          <ReactFlow 
-            nodes={nodes} 
-            edges={edges} 
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            nodeTypes={nodeTypes}
-            onNodeClick={onNodeClick}
-            fitView
-            fitViewOptions={{ padding: 0.25 }}
-          >
-            <Background gap={22} size={1} color="#cbd5e1" />
-            <Controls className="!bg-white !border-[#e2eae4] !rounded-2xl !shadow-md" />
-            <MiniMap 
-              style={{ height: 110, borderRadius: 16, border: '1px solid #e2eae4', background: '#ffffff' }} 
-              zoomable 
-              pannable 
-            />
-          </ReactFlow>
-        </div>
+        {/* ReactFlow Interactive Graph Canvas */}
+        {!isCanvasMinimized ? (
+          <div className="flex-1 w-full h-full bg-[#f4f7f4]">
+            <ReactFlow 
+              nodes={nodes} 
+              edges={edges} 
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              onNodeClick={onNodeClick}
+              fitView
+              fitViewOptions={{ padding: 0.25 }}
+            >
+              <Background gap={22} size={1} color="#cbd5e1" />
+              <Controls className="!bg-white !border-[#e2eae4] !rounded-2xl !shadow-md" />
+              <MiniMap style={{ height: 110, borderRadius: 16, border: '1px solid #e2eae4', background: '#ffffff' }} zoomable pannable />
+            </ReactFlow>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center cursor-pointer bg-[#fbfcfb] border-r border-[#e2eae4]" onClick={() => setIsCanvasMinimized(false)}>
+            <div className="[writing-mode:vertical-lr] text-[11px] font-black text-[#4a6b5d] uppercase tracking-widest flex items-center gap-2 py-4">
+              <span>Knowledge Graph Canvas</span>
+              <ChevronRight size={16} />
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Sidebar Inspector Panel */}
-      <aside className="w-[420px] bg-[#fbfcfb] border-l border-[#e2eae4] flex flex-col justify-between overflow-hidden z-20 shadow-md">
+      {/* Sidebar Inspector Panel (Expands to cover window when canvas is minimized, or when sidebar is active) */}
+      <aside className={`bg-[#fbfcfb] border-l border-[#e2eae4] flex flex-col justify-between overflow-hidden z-20 shadow-md transition-all duration-300 ${
+        isSidebarMinimized ? 'w-16 p-3 items-center' : isCanvasMinimized ? 'flex-1 p-8' : 'w-[420px] p-6'
+      }`}>
         
         {/* Sidebar Header */}
-        <div className="p-6 border-b border-[#e2eae4] space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md">
-                <Network size={17} />
+        <div className={`border-b border-[#e2eae4] space-y-4 ${isSidebarMinimized ? 'pb-3 w-full flex flex-col items-center' : 'pb-6'}`}>
+          <div className="flex items-center justify-between w-full">
+            {!isSidebarMinimized && (
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md">
+                  <Network size={17} />
+                </div>
+                <h3 className="text-sm font-black text-[#112217]">Concept Inspector</h3>
               </div>
-              <h3 className="text-sm font-black text-[#112217]">Concept Inspector</h3>
-            </div>
+            )}
 
-            {selectedNodeData && (
+            {/* Minimize / Expand Toggle Button */}
+            <button 
+              onClick={() => setIsSidebarMinimized(!isSidebarMinimized)}
+              className={`p-2 rounded-xl bg-[#f4f7f4] hover:bg-[#d3efdc]/50 text-[#4a6b5d] hover:text-[#112217] transition cursor-pointer ${isSidebarMinimized ? 'mx-auto' : 'ml-auto'}`}
+              title={isSidebarMinimized ? "Expand Inspector" : "Minimize Inspector"}
+            >
+              {isSidebarMinimized ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+            </button>
+          </div>
+
+          {!isSidebarMinimized && selectedNodeData && (
+            <div className="flex items-center justify-between pt-1">
               <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-xl shadow-sm ${
                 selectedNodeData.status === 'COMPLETED' ? 'bg-[#d3efdc] text-[#112217] border border-[#bce8c9]' :
                 selectedNodeData.is_unlocked ? 'bg-[#112217] text-white' : 'bg-slate-200 text-slate-600'
               }`}>
                 {selectedNodeData.status || (selectedNodeData.is_unlocked ? 'Unlocked' : 'Locked')}
               </span>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Tab Switcher: Concept Content vs Knowledge Quiz */}
-          {selectedNodeData && (
+          {!isSidebarMinimized && selectedNodeData && (
             <div className="flex bg-[#f4f7f4] border border-[#e2eae4] p-1 rounded-2xl gap-1">
               <button
                 onClick={() => setActiveTab('content')}
@@ -582,271 +595,280 @@ export default function StudentCourseWorkspace() {
           )}
         </div>
 
-        {/* Scrollable Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {selectedNodeData ? (
-            <>
-              {/* Node Card Banner */}
-              <div className={`p-5 rounded-[24px] border shadow-sm ${
-                selectedNodeData.status === 'COMPLETED' 
-                  ? 'bg-[#d3efdc]/40 border-[#bce8c9]' 
-                  : selectedNodeData.is_unlocked 
-                    ? 'bg-white border-[#2e5a44]' 
-                    : 'bg-[#f4f7f4] border-[#e2eae4]'
-              }`}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#4a6b5d]">
-                    Topic Key: <span className="font-mono text-[#112217]">{selectedNodeData.node_key || 'node'}</span>
-                  </span>
-                  {selectedNodeData.best_score_percentage !== null && selectedNodeData.best_score_percentage !== undefined && (
-                    <span className="text-[10px] font-bold text-[#2e5a44]">
-                      Best Score: {Math.round(selectedNodeData.best_score_percentage)}%
+        {/* Scrollable Content Body (Hidden when minimized) */}
+        {!isSidebarMinimized ? (
+          <div className="flex-1 overflow-y-auto py-6 space-y-6">
+            {selectedNodeData ? (
+              <>
+                <div className={`p-5 rounded-[24px] border shadow-sm ${
+                  selectedNodeData.status === 'COMPLETED' 
+                    ? 'bg-[#d3efdc]/40 border-[#bce8c9]' 
+                    : selectedNodeData.is_unlocked 
+                      ? 'bg-white border-[#2e5a44]' 
+                      : 'bg-[#f4f7f4] border-[#e2eae4]'
+                }`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#4a6b5d]">
+                      Topic Key: <span className="font-mono text-[#112217]">{selectedNodeData.node_key || 'node'}</span>
                     </span>
-                  )}
+                    {selectedNodeData.best_score_percentage !== null && selectedNodeData.best_score_percentage !== undefined && (
+                      <span className="text-[10px] font-bold text-[#2e5a44]">
+                        Best Score: {Math.round(selectedNodeData.best_score_percentage)}%
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="text-sm font-black text-[#112217] leading-snug">
+                    {selectedNodeData.label || selectedNodeData.title}
+                  </h4>
                 </div>
-                <h4 className="text-sm font-black text-[#112217] leading-snug">
-                  {selectedNodeData.label || selectedNodeData.title}
-                </h4>
-              </div>
 
-              {/* TAB 1: CONCEPT CONTENT */}
-              {activeTab === 'content' && (
-                <div className="space-y-5">
-                  {/* Summary Markdown */}
-                  <div className="space-y-2">
-                    <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
-                      <BookOpen size={14} className="text-[#2e5a44]" />
-                      Syllabus Concept Summary
-                    </h5>
+                {/* TAB 1: CONCEPT CONTENT */}
+                {activeTab === 'content' && (
+                  <div className="space-y-5">
+                    <div className="space-y-2">
+                      <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
+                        <BookOpen size={14} className="text-[#2e5a44]" />
+                        Syllabus Concept Summary
+                      </h5>
 
-                    {selectedNodeData.is_unlocked ? (
-                      <div className="text-xs text-[#1e2923] leading-relaxed bg-white p-4 rounded-2xl border border-[#e2eae4] prose prose-xs max-w-none shadow-sm">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {selectedNodeData.summary || selectedNodeData.description || 'No detailed syllabus summary available for this node.'}
-                        </ReactMarkdown>
+                      {selectedNodeData.is_unlocked ? (
+                        <div className="text-xs text-[#1e2923] leading-relaxed bg-white p-4 rounded-2xl border border-[#e2eae4] prose prose-xs max-w-none shadow-sm">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {selectedNodeData.summary || selectedNodeData.description || 'No detailed syllabus summary available for this node.'}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl flex items-center gap-2.5 text-xs text-[#4a6b5d] italic shadow-sm">
+                          <Lock size={15} className="shrink-0 text-slate-400" />
+                          <span>Content locked. Pass upstream prerequisite quizzes to view this topic summary.</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {selectedNodeData.page_references && (
+                      <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-1 shadow-sm">
+                        <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] flex items-center gap-1">
+                          <FileText size={12} className="text-[#2e5a44]" /> Textbook Page References
+                        </span>
+                        <p className="text-xs font-bold text-[#112217]">
+                          {Array.isArray(selectedNodeData.page_references) 
+                            ? selectedNodeData.page_references.join(', ') 
+                            : String(selectedNodeData.page_references)}
+                        </p>
+                      </div>
+                    )}
+
+                    {(selectedNodeData.youtube_url || selectedNodeData.video_url) && selectedNodeData.is_unlocked && (
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
+                          <PlayCircle size={14} className="text-[#2e5a44]" />
+                          Curated Video Lesson
+                        </h5>
+                        {getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds) ? (
+                          <div className="aspect-video w-full rounded-2xl overflow-hidden border border-[#e2eae4] shadow-sm">
+                            <iframe
+                              src={getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds)!}
+                              title="Video Lecture"
+                              className="w-full h-full"
+                              allowFullScreen
+                            />
+                          </div>
+                        ) : (
+                          <a 
+                            href={selectedNodeData.youtube_url || selectedNodeData.video_url} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="p-3 bg-white border border-[#e2eae4] rounded-2xl text-xs font-bold text-[#2e5a44] block hover:underline"
+                          >
+                            Open External Video Lecture &rarr;
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedNodeData.is_unlocked && (
+                      <button
+                        onClick={() => setActiveTab('quiz')}
+                        className="w-full py-3 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <HelpCircle size={14} /> Start Knowledge Assessment &rarr;
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 2: QUIZ ASSESSMENT */}
+                {activeTab === 'quiz' && (
+                  <div className="space-y-5">
+                    <div className="flex items-center justify-between p-3 bg-white border border-[#e2eae4] rounded-2xl shadow-sm">
+                      <span className="text-xs font-bold text-[#112217]">Assessment Batch:</span>
+                      <div className="flex gap-1.5">
+                        {[1, 2].map((setNum) => (
+                          <button
+                            key={setNum}
+                            onClick={() => setActiveQuizSet(setNum)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                              activeQuizSet === setNum
+                                ? 'bg-[#112217] text-white shadow-sm'
+                                : 'bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:bg-[#d3efdc]/40'
+                            }`}
+                          >
+                            Set {setNum}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {loadingQuiz ? (
+                      <div className="text-center py-12 space-y-2">
+                        <Loader2 size={20} className="animate-spin text-[#2e5a44] mx-auto" />
+                        <p className="text-xs text-[#4a6b5d] font-bold">Loading questions for Set {activeQuizSet}...</p>
+                      </div>
+                    ) : quizzes.length === 0 ? (
+                      <div className="p-6 bg-white border border-[#e2eae4] rounded-2xl text-center space-y-2 shadow-sm">
+                        <p className="text-xs font-bold text-[#112217]">No quizzes configured for Set {activeQuizSet}.</p>
+                        <p className="text-[11px] text-[#4a6b5d]">Try switching to Set 1 or check other modules.</p>
                       </div>
                     ) : (
-                      <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl flex items-center gap-2.5 text-xs text-[#4a6b5d] italic shadow-sm">
-                        <Lock size={15} className="shrink-0 text-slate-400" />
-                        <span>Content locked. Pass upstream prerequisite quizzes to view this topic summary.</span>
+                      <div className="space-y-4">
+                        {quizzes.map((quiz, qIdx) => (
+                          <div key={quiz.id} className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-2.5 shadow-sm">
+                            <p className="text-xs font-bold text-[#112217] leading-snug">
+                              {qIdx + 1}. {quiz.question_text}
+                            </p>
+                            <div className="space-y-1.5">
+                              {quiz.options?.map((opt: string, optIdx: number) => {
+                                const isChecked = selectedAnswers[quiz.id] === optIdx;
+                                return (
+                                  <label 
+                                    key={optIdx} 
+                                    className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                                      isChecked
+                                        ? 'bg-[#d3efdc]/60 border-[#2e5a44] text-[#112217] font-bold shadow-sm'
+                                        : 'bg-white border-[#e2eae4] text-[#4a6b5d] hover:bg-[#f4f7f4]'
+                                    }`}
+                                  >
+                                    <input 
+                                      type="radio" 
+                                      name={`quiz-${quiz.id}`} 
+                                      checked={isChecked}
+                                      disabled={submittingQuiz}
+                                      onChange={() => setSelectedAnswers({ ...selectedAnswers, [quiz.id]: optIdx })}
+                                      className="accent-[#112217]"
+                                    />
+                                    <span>{opt}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+
+                        {quizResult && (
+                          <div className={`p-4 rounded-2xl border text-xs space-y-2 shadow-sm ${
+                            quizResult.is_passed 
+                              ? 'bg-[#d3efdc]/70 border-[#bce8c9] text-[#112217]' 
+                              : 'bg-rose-50 border-rose-200 text-rose-900'
+                          }`}>
+                            <div className="flex items-center justify-between">
+                              <span className="font-black text-sm">
+                                {quizResult.is_passed ? 'Set Passed!' : 'Set Attempt Failed'}
+                              </span>
+                              <span className="font-mono font-bold text-xs">
+                                {quizResult.score_percentage}% ({quizResult.correct_answers_count}/{quizResult.total_questions})
+                              </span>
+                            </div>
+
+                            {quizResult.node_fully_completed && (
+                              <p className="text-[11px] font-black text-[#2e5a44] pt-1">
+                                Node Fully Completed! All required quiz sets passed.
+                              </p>
+                            )}
+
+                            {quizResult.unlocked_next_node_keys?.length > 0 && (
+                              <p className="text-[11px] font-bold text-[#2e5a44]">
+                                Unlocked downstream concept(s): {quizResult.unlocked_next_node_keys.join(', ')}
+                              </p>
+                            )}
+
+                            {quizResult.feedback?.length > 0 && (
+                              <div className="pt-2 border-t border-[#bce8c9] space-y-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider block">Question Explanations:</span>
+                                {quizResult.feedback.map((fb, fbIdx) => (
+                                  <div key={fbIdx} className="bg-white/80 p-2.5 rounded-xl border border-white/60 space-y-1">
+                                    <div className="flex justify-between items-center text-[10px]">
+                                      <span className="font-bold text-[#112217]">Q{fbIdx + 1}</span>
+                                      <span className={fb.is_correct ? 'text-[#2e5a44] font-bold' : 'text-rose-600 font-bold'}>
+                                        {fb.is_correct ? 'Correct' : 'Incorrect'}
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-600 leading-relaxed">{fb.explanation}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <button
+                          onClick={handleQuizSubmit}
+                          disabled={submittingQuiz || Object.keys(selectedAnswers).length === 0}
+                          className="w-full bg-[#112217] text-white rounded-2xl py-3.5 text-xs font-bold hover:bg-[#223d2f] transition shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          {submittingQuiz ? (
+                            <>
+                              <Loader2 size={14} className="animate-spin" /> Evaluating Answers...
+                            </>
+                          ) : (
+                            <>
+                              Submit Assessment (Set {activeQuizSet}) &rarr;
+                            </>
+                          )}
+                        </button>
                       </div>
                     )}
                   </div>
-
-                  {/* Page References */}
-                  {selectedNodeData.page_references && (
-                    <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-1 shadow-sm">
-                      <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] flex items-center gap-1">
-                        <FileText size={12} className="text-[#2e5a44]" /> Textbook Page References
-                      </span>
-                      <p className="text-xs font-bold text-[#112217]">
-                        {Array.isArray(selectedNodeData.page_references) 
-                          ? selectedNodeData.page_references.join(', ') 
-                          : String(selectedNodeData.page_references)}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Embedded Video Resource */}
-                  {(selectedNodeData.youtube_url || selectedNodeData.video_url) && selectedNodeData.is_unlocked && (
-                    <div className="space-y-2">
-                      <h5 className="text-xs font-extrabold text-[#4a6b5d] uppercase tracking-wider flex items-center gap-1.5">
-                        <PlayCircle size={14} className="text-[#2e5a44]" />
-                        Curated Video Lesson
-                      </h5>
-                      {getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds) ? (
-                        <div className="aspect-video w-full rounded-2xl overflow-hidden border border-[#e2eae4] shadow-sm">
-                          <iframe
-                            src={getEmbedYoutubeUrl(selectedNodeData.youtube_url || selectedNodeData.video_url, selectedNodeData.youtube_timestamp_seconds)!}
-                            title="Video Lecture"
-                            className="w-full h-full"
-                            allowFullScreen
-                          />
-                        </div>
-                      ) : (
-                        <a 
-                          href={selectedNodeData.youtube_url || selectedNodeData.video_url} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="p-3 bg-white border border-[#e2eae4] rounded-2xl text-xs font-bold text-[#2e5a44] block hover:underline"
-                        >
-                          Open External Video Lecture &rarr;
-                        </a>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Jump to Assessment Button */}
-                  {selectedNodeData.is_unlocked && (
-                    <button
-                      onClick={() => setActiveTab('quiz')}
-                      className="w-full py-3 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <HelpCircle size={14} /> Start Knowledge Assessment &rarr;
-                    </button>
-                  )}
+                )}
+              </>
+            ) : (
+              <div className="text-center py-24 space-y-3 text-[#4a6b5d]">
+                <div className="w-14 h-14 rounded-2xl bg-white border border-[#e2eae4] flex items-center justify-center mx-auto shadow-sm">
+                  <Network size={24} className="text-[#2e5a44]" />
                 </div>
-              )}
-
-              {/* TAB 2: QUIZ ASSESSMENT */}
-              {activeTab === 'quiz' && (
-                <div className="space-y-5">
-                  {/* Set Selector Pills (Set 1 & Set 2 required for 100% node pass) */}
-                  <div className="flex items-center justify-between p-3 bg-white border border-[#e2eae4] rounded-2xl shadow-sm">
-                    <span className="text-xs font-bold text-[#112217]">Assessment Batch:</span>
-                    <div className="flex gap-1.5">
-                      {[1, 2].map((setNum) => (
-                        <button
-                          key={setNum}
-                          onClick={() => setActiveQuizSet(setNum)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-                            activeQuizSet === setNum
-                              ? 'bg-[#112217] text-white shadow-sm'
-                              : 'bg-[#f4f7f4] border border-[#e2eae4] text-[#4a6b5d] hover:bg-[#d3efdc]/40'
-                          }`}
-                        >
-                          Set {setNum}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Questions List */}
-                  {loadingQuiz ? (
-                    <div className="text-center py-12 space-y-2">
-                      <Loader2 size={20} className="animate-spin text-[#2e5a44] mx-auto" />
-                      <p className="text-xs text-[#4a6b5d] font-bold">Loading questions for Set {activeQuizSet}...</p>
-                    </div>
-                  ) : quizzes.length === 0 ? (
-                    <div className="p-6 bg-white border border-[#e2eae4] rounded-2xl text-center space-y-2 shadow-sm">
-                      <p className="text-xs font-bold text-[#112217]">No quizzes configured for Set {activeQuizSet}.</p>
-                      <p className="text-[11px] text-[#4a6b5d]">Try switching to Set 1 or check other modules.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {quizzes.map((quiz, qIdx) => (
-                        <div key={quiz.id} className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-2.5 shadow-sm">
-                          <p className="text-xs font-bold text-[#112217] leading-snug">
-                            {qIdx + 1}. {quiz.question_text}
-                          </p>
-                          <div className="space-y-1.5">
-                            {quiz.options?.map((opt: string, optIdx: number) => {
-                              const isChecked = selectedAnswers[quiz.id] === optIdx;
-                              return (
-                                <label 
-                                  key={optIdx} 
-                                  className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer transition ${
-                                    isChecked
-                                      ? 'bg-[#d3efdc]/60 border-[#2e5a44] text-[#112217] font-bold shadow-sm'
-                                      : 'bg-white border-[#e2eae4] text-[#4a6b5d] hover:bg-[#f4f7f4]'
-                                  }`}
-                                >
-                                  <input 
-                                    type="radio" 
-                                    name={`quiz-${quiz.id}`} 
-                                    checked={isChecked}
-                                    disabled={submittingQuiz}
-                                    onChange={() => setSelectedAnswers({ ...selectedAnswers, [quiz.id]: optIdx })}
-                                    className="accent-[#112217]"
-                                  />
-                                  <span>{opt}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-
-                      {/* Quiz Evaluation Feedback Card */}
-                      {quizResult && (
-                        <div className={`p-4 rounded-2xl border text-xs space-y-2 shadow-sm ${
-                          quizResult.is_passed 
-                            ? 'bg-[#d3efdc]/70 border-[#bce8c9] text-[#112217]' 
-                            : 'bg-rose-50 border-rose-200 text-rose-900'
-                        }`}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-black text-sm">
-                              {quizResult.is_passed ? 'Set Passed!' : 'Set Attempt Failed'}
-                            </span>
-                            <span className="font-mono font-bold text-xs">
-                              {quizResult.score_percentage}% ({quizResult.correct_answers_count}/{quizResult.total_questions})
-                            </span>
-                          </div>
-
-                          {quizResult.node_fully_completed && (
-                            <p className="text-[11px] font-black text-[#2e5a44] pt-1">
-                              Node Fully Completed! All required quiz sets passed.
-                            </p>
-                          )}
-
-                          {quizResult.unlocked_next_node_keys?.length > 0 && (
-                            <p className="text-[11px] font-bold text-[#2e5a44]">
-                              Unlocked downstream concept(s): {quizResult.unlocked_next_node_keys.join(', ')}
-                            </p>
-                          )}
-
-                          {/* Detailed Question Feedback Explanations */}
-                          {quizResult.feedback?.length > 0 && (
-                            <div className="pt-2 border-t border-[#bce8c9] space-y-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider block">Question Explanations:</span>
-                              {quizResult.feedback.map((fb, fbIdx) => (
-                                <div key={fbIdx} className="bg-white/80 p-2.5 rounded-xl border border-white/60 space-y-1">
-                                  <div className="flex justify-between items-center text-[10px]">
-                                    <span className="font-bold text-[#112217]">Q{fbIdx + 1}</span>
-                                    <span className={fb.is_correct ? 'text-[#2e5a44] font-bold' : 'text-rose-600 font-bold'}>
-                                      {fb.is_correct ? 'Correct' : 'Incorrect'}
-                                    </span>
-                                  </div>
-                                  <p className="text-[10px] text-slate-600 leading-relaxed">{fb.explanation}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Submit Answers Button */}
-                      <button
-                        onClick={handleQuizSubmit}
-                        disabled={submittingQuiz || Object.keys(selectedAnswers).length === 0}
-                        className="w-full bg-[#112217] text-white rounded-2xl py-3.5 text-xs font-bold hover:bg-[#223d2f] transition shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        {submittingQuiz ? (
-                          <>
-                            <Loader2 size={14} className="animate-spin" /> Evaluating Answers...
-                          </>
-                        ) : (
-                          <>
-                            Submit Assessment (Set {activeQuizSet}) &rarr;
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="text-center py-24 space-y-3 text-[#4a6b5d]">
-              <div className="w-14 h-14 rounded-2xl bg-white border border-[#e2eae4] flex items-center justify-center mx-auto shadow-sm">
-                <Network size={24} className="text-[#2e5a44]" />
+                <p className="text-xs font-bold text-[#112217]">Select a node on the canvas</p>
+                <p className="text-[11px] text-[#4a6b5d] max-w-xs mx-auto">
+                  Click any concept circle on your interactive graph to inspect curriculum references and unlock quiz questions.
+                </p>
               </div>
-              <p className="text-xs font-bold text-[#112217]">Select a node on the canvas</p>
-              <p className="text-[11px] text-[#4a6b5d] max-w-xs mx-auto">
-                Click any concept circle on your interactive graph to inspect curriculum references and unlock quiz questions.
-              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center space-y-4 cursor-pointer" onClick={() => setIsSidebarMinimized(false)}>
+            <div className="[writing-mode:vertical-lr] text-[11px] font-black text-[#4a6b5d] uppercase tracking-widest flex items-center gap-2 py-4">
+              <span>Concept Inspector</span>
+              <ChevronLeft size={16} />
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Sidebar Footer */}
-        <div className="p-6 border-t border-[#e2eae4] bg-white">
-          <button 
-            onClick={() => router.push('/student/dashboard')}
-            className="w-full bg-[#f4f7f4] text-[#112217] border border-[#e2eae4] rounded-2xl py-3 text-xs font-bold hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
-          >
-            Return to Dashboard
-          </button>
+        <div className={`border-t border-[#e2eae4] bg-white ${isSidebarMinimized ? 'p-3 flex justify-center' : 'p-6'}`}>
+          {!isSidebarMinimized ? (
+            <button 
+              onClick={() => router.push('/student/dashboard')}
+              className="w-full bg-[#f4f7f4] text-[#112217] border border-[#e2eae4] rounded-2xl py-3 text-xs font-bold hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
+            >
+              Return to Dashboard
+            </button>
+          ) : (
+            <button 
+              onClick={() => router.push('/student/dashboard')}
+              className="p-2.5 bg-[#f4f7f4] text-[#112217] border border-[#e2eae4] rounded-xl hover:bg-[#d3efdc]/40 transition cursor-pointer"
+              title="Return to Dashboard"
+            >
+              <ArrowLeft size={16} />
+            </button>
+          )}
         </div>
 
       </aside>

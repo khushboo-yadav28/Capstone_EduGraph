@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from uuid import uuid4
 from google import genai
 from google.genai import types
@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.config import (
     GEMINI_API_KEY,
     GEMINI_PRIMARY_MODEL,
+    GEMINI_FALLBACK_MODEL,
     GEMINI_INGESTION_TEMPERATURE,
     GEMINI_INGESTION_MAX_TOKENS,
 )
@@ -19,11 +20,84 @@ from app.utils.graph_layout import calculate_dag_layout
 logger = logging.getLogger(__name__)
 
 # Initialize Google GenAI Client
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 # ==========================================
-# 1. Structured Output Pydantic Schemas
+# 1. Dynamic Model Discovery & Resolution
+# ==========================================
+
+_DISCOVERED_GEN_MODELS: Optional[List[str]] = None
+_DISCOVERED_EMBED_MODELS: Optional[List[str]] = None
+
+
+def get_candidate_generation_models() -> List[str]:
+    """Dynamically retrieves and prioritizes active Gemini generation models."""
+    global _DISCOVERED_GEN_MODELS
+    if _DISCOVERED_GEN_MODELS is None and client:
+        try:
+            available: List[str] = []
+            for m in client.models.list():
+                raw_name = getattr(m, "name", "") or ""
+                clean_name = raw_name.replace("models/", "").strip()
+                methods = getattr(m, "supported_generation_methods", None) or getattr(m, "supported_actions", None) or []
+                methods_str = " ".join([str(x) for x in methods])
+                if "generateContent" in methods_str or "generate_content" in methods_str or not methods:
+                    available.append(clean_name)
+            logger.info(f"Dynamically discovered {len(available)} available Gemini generation models: {available[:10]}")
+            _DISCOVERED_GEN_MODELS = available
+        except Exception as e:
+            logger.warning(f"Could not dynamically list Gemini models: {e}")
+            _DISCOVERED_GEN_MODELS = []
+
+    # Priority order: Configured models -> gemini-3.8-flash (Google recommended) -> discovered models
+    defaults = [
+        GEMINI_PRIMARY_MODEL,
+        "gemini-3.8-flash",
+        GEMINI_FALLBACK_MODEL,
+        "gemini-3-flash-preview",
+        "gemini-flash-latest",
+    ]
+    candidates: List[str] = []
+    for model in defaults + (_DISCOVERED_GEN_MODELS or []):
+        if model and model not in candidates:
+            candidates.append(model)
+    return candidates
+
+
+def get_candidate_embedding_models() -> List[str]:
+    """Dynamically retrieves and prioritizes active Gemini embedding models."""
+    global _DISCOVERED_EMBED_MODELS
+    if _DISCOVERED_EMBED_MODELS is None and client:
+        try:
+            available: List[str] = []
+            for m in client.models.list():
+                raw_name = getattr(m, "name", "") or ""
+                clean_name = raw_name.replace("models/", "").strip()
+                methods = getattr(m, "supported_generation_methods", None) or getattr(m, "supported_actions", None) or []
+                methods_str = " ".join([str(x) for x in methods])
+                if "embedContent" in methods_str or "embed_content" in methods_str or "embedding" in clean_name.lower():
+                    available.append(clean_name)
+            logger.info(f"Dynamically discovered Gemini embedding models: {available}")
+            _DISCOVERED_EMBED_MODELS = available
+        except Exception as e:
+            logger.warning(f"Could not dynamically list embedding models: {e}")
+            _DISCOVERED_EMBED_MODELS = []
+
+    defaults = [
+        "text-embedding-005",
+        "text-embedding-preview",
+        "embedding-001",
+    ]
+    candidates: List[str] = []
+    for model in (_DISCOVERED_EMBED_MODELS or []) + defaults:
+        if model and model not in candidates:
+            candidates.append(model)
+    return candidates
+
+
+# ==========================================
+# 2. Structured Output Pydantic Schemas
 # (Strictly matched to DB models and Schemas)
 # ==========================================
 
@@ -58,7 +132,7 @@ class GeminiNodeSchema(BaseModel):
     )
     page_references: Optional[str] = Field(
         None, 
-        description="Location in the source PDF, e.g., 'Pages 4-6' or 'Section 2.1'."
+        description="Location in the source documents, e.g., 'Document A: Pages 4-6' or 'Lecture 1: Section 2.1'."
     )
     youtube_url: Optional[str] = Field(
         None, 
@@ -72,11 +146,10 @@ class GeminiNodeSchema(BaseModel):
         ..., 
         min_items=20, 
         max_items=20, 
-         description=(
-        "Exactly 20 quiz questions total. The first 10 questions must have "
-        "set_number=1. The next 10 questions must have set_number=2."
-    )
-        # description="Generate either 10 questions (1 quiz block) or 20 questions (2 quiz blocks of 10) per node as a multiple of 10."
+        description=(
+            "Exactly 20 quiz questions total. The first 10 questions must have "
+            "set_number=1. The next 10 questions must have set_number=2."
+        )
     )
 
 
@@ -99,50 +172,165 @@ class CourseGraphExtractionSchema(BaseModel):
 
 
 # ==========================================
-# 2. Ingestion Service Implementation
+# 3. Antigravity Text Chunking & Embeddings
 # ==========================================
 
-def extract_course_graph_from_pdf(
+def extract_text_chunks_from_pdf(
     pdf_bytes: bytes, 
-    mime_type: str = "application/pdf"
-) -> Dict[str, Any]:
+    document_name: str = "document.pdf", 
+    chunk_size: int = 800, 
+    chunk_overlap: int = 150
+) -> List[Dict[str, Any]]:
     """
-    Ingests PDF bytes, sends them to Gemini for complete Concept Knowledge Graph extraction,
-    generates 20 quiz questions per node, calculates DAG coordinates, and returns DB-ready payload.
+    Extracts text per page from PDF bytes using PyMuPDF and creates chunk records
+    with page references for RAG context.
     """
+    chunks: List[Dict[str, Any]] = []
+    try:
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
 
-    prompt = """
-    You are an expert Curriculum Engineer and Instructional Designer.
-    Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        chunk_idx = 0
+        for page_idx, page in enumerate(doc, start=1):
+            page_text = page.get_text("text").strip()
+            if not page_text:
+                continue
 
-    CRITICAL INSTRUCTIONS:
-    1. TOPOLOGY & KNOWLEDGE GRAPH:
-       - Extract learning concepts as ordered nodes with unique lowercase keys ('node_1', 'node_2', etc.).
-       - Create directed edges (source_node_key -> target_node_key) to define prerequisite learning flow forming a valid DAG with NO cycles.
+            words = page_text.split()
+            step = max(1, (chunk_size - chunk_overlap) // 5)
+            window = max(1, chunk_size // 5)
+            
+            start = 0
+            while start < len(words):
+                end = min(start + window, len(words))
+                chunk_str = " ".join(words[start:end]).strip()
+                if len(chunk_str) > 30:
+                    chunks.append({
+                        "chunk_index": chunk_idx,
+                        "content": chunk_str,
+                        "page_number": page_idx,
+                        "document_name": document_name
+                    })
+                    chunk_idx += 1
+                if end >= len(words):
+                    break
+                start += step
+        doc.close()
+    except Exception as e:
+        logger.warning(f"PyMuPDF text extraction warning for '{document_name}': {str(e)}")
+    return chunks
 
-    2. DYNAMIC NODE QUANTITY & GRANULARITY (BASED ON PDF LENGTH):
-       - Determine the scope/length of the uploaded PDF and scale the number of nodes accordingly:
-         * 1 to 20 pages: Extract 3-4 nodes.
-         * 21 to 50 pages: Extract 5-7 nodes.
-         * 51 to 100 pages: Extract 8-12 nodes.
-         * 100+ pages: Extract 12+ nodes.
-       - Group closely related sub-topics into comprehensive nodes rather than micro-nodes.
 
-    3. NODE CONTENT, SUMMARY & FORMATTING:
-       - Target Depth Level: University / Rigorous Academic standard.
-       - Word Count: Each node summary must be comprehensive (roughly 250 to 450 words, rich in detail even if the underlying PDF source text is brief).
-       - Formatting: Use Markdown with a hybrid structure:
-         * A 2-3 sentence overview introducing the core concept.
-         * A section of 3-5 DETAILED bullet points (each 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
-         * A practical example or real-world use-case.
-       - Contextual Continuity: Relate current nodes back to upstream prerequisites (e.g., "Building on [Prerequisite Node Title]...").
-       - Page References: Include explicit source PDF page references (e.g., "Pages 12-15").
+def generate_embeddings_for_chunks(
+    chunks: Union[List[Dict[str, Any]], List[str]]
+) -> Union[List[Dict[str, Any]], List[Optional[List[float]]]]:
+    """
+    Generates embeddings using the active Gemini embedding model.
+    Gracefully handles rate-limits or fallback without blocking the main workflow.
+    """
+    if not chunks:
+        return []
 
-    4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
-       - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
-       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL UNLESS an explicit YouTube link is written in the PDF text.
+    is_dict_list = isinstance(chunks[0], dict)
+    text_contents = [c["content"] if is_dict_list else c for c in chunks]
 
-    5. MANDATORY DUAL-SET QUESTION BANK:
+    embeddings: List[Optional[List[float]]] = []
+    if not client or not GEMINI_API_KEY:
+        if is_dict_list:
+            for c in chunks:
+                c["embedding"] = None
+            return chunks
+        return [None] * len(text_contents)
+
+    embedding_models = get_candidate_embedding_models()
+
+    batch_size = 10
+    for i in range(0, len(text_contents), batch_size):
+        batch = text_contents[i:i + batch_size]
+        batch_embeddings: Optional[List[Optional[List[float]]]] = None
+
+        for emb_model in embedding_models:
+            try:
+                # Request 768 output dimensions natively
+                try:
+                    res = client.models.embed_content(
+                        model=emb_model,
+                        contents=batch,
+                        config=types.EmbedContentConfig(output_dimensionality=768)
+                    )
+                except Exception:
+                    res = client.models.embed_content(
+                        model=emb_model,
+                        contents=batch
+                    )
+
+                if hasattr(res, "embeddings") and res.embeddings:
+                    batch_embeddings = []
+                    for e in res.embeddings:
+                        vals = getattr(e, "values", None)
+                        if vals is not None and isinstance(vals, list):
+                            # Enforce exactly 768 dimensions for pgvector column
+                            if len(vals) > 768:
+                                vals = vals[:768]
+                            elif len(vals) < 768:
+                                vals = vals + [0.0] * (768 - len(vals))
+                        batch_embeddings.append(vals)
+                    break
+            except Exception as e:
+                logger.warning(f"Embedding model '{emb_model}' attempt failed: {str(e)}")
+
+        if batch_embeddings:
+            embeddings.extend(batch_embeddings)
+        else:
+            embeddings.extend([None] * len(batch))
+
+    if is_dict_list:
+        for idx, c in enumerate(chunks):
+            c["embedding"] = embeddings[idx] if idx < len(embeddings) else None
+        return chunks
+
+    return embeddings
+
+
+# ==========================================
+# 4. Multi-Document Knowledge Graph Extraction
+# ==========================================
+
+INGESTION_PROMPT = """
+You are an expert Curriculum Engineer and Instructional Designer for the EduGraph Knowledge Graph Adaptive Courseware System.
+Analyze the uploaded course document(s) and synthesize a cohesive, structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
+
+CRITICAL INSTRUCTIONS:
+1. TOPOLOGY & KNOWLEDGE GRAPH:
+   - Synthesize all primary topics across the uploaded material into ordered learning concepts.
+   - Extract concepts as ordered nodes with unique lowercase keys ('node_1', 'node_2', 'node_3', etc.).
+   - Create directed edges (source_node_key -> target_node_key) defining prerequisite learning flow forming a valid DAG with NO cycles.
+
+2. DYNAMIC NODE QUANTITY & GRANULARITY:
+   - Scale the number of nodes appropriately according to content depth across all uploaded documents:
+     * Brief material (1-20 pages): 3-5 nodes.
+     * Medium scope (21-60 pages): 6-8 nodes.
+     * Comprehensive curriculum (60+ pages): 9-14 nodes.
+   - Group closely related sub-topics into comprehensive, self-contained nodes.
+
+3. NODE CONTENT, SUMMARY & FORMATTING:
+   - Target Depth Level: University / Rigorous Academic standard.
+   - Word Count: Each node summary must be comprehensive (roughly 250 to 450 words, rich in educational detail).
+   - Formatting: Use structured Markdown:
+     * A 2-3 sentence overview introducing the core concept.
+     * 3-5 DETAILED bullet points (each with **bold** key terms) explaining internal mechanics, rules, or formulas.
+     * A practical example or real-world use-case.
+   - Contextual Continuity: Relate current nodes back to upstream prerequisites (e.g., "Building on [Prerequisite Node Title]...").
+   - References: Include explicit source document and page references (e.g., "Lecture 1: Pages 4-6").
+
+4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
+   - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
+   - Set `youtube_url` and `youtube_timestamp_seconds` to NULL UNLESS an explicit YouTube link is written in the PDF text.
+
+5. MANDATORY DUAL-SET QUESTION BANK:
    - Generate exactly 20 quiz objects for every node.
    - The quizzes array MUST contain exactly 20 objects in this order:
      * Array indexes 0-9: exactly 10 questions, each with set_number=1.
@@ -151,189 +339,101 @@ def extract_course_graph_from_pdf(
    - Do not omit set_number from any question.
    - Set 2 must contain its own 10 questions, not duplicate Set 1.
    - Every question must contain exactly 4 options.
+"""
+
+
+def extract_course_graph_from_multiple_pdfs(
+    documents: Union[List[Dict[str, Any]], List[tuple[bytes, str]], List[bytes]]
+) -> Dict[str, Any]:
     """
-    
-    
-   
-    # 5. DYNAMIC QUESTION BANK (MULTIPLE OF 10 RULE):
-    #    - For each node, generate quizzes subject to strict limits:
-    #      * **Lower Limit**: 1 quiz per node containing exactly 10 questions.
-    #      * **Upper Limit**: 2 quizzes per node, where each quiz contains exactly 10 questions (totaling 20 questions for that node).
-    #    - Use 2 quizzes for larger/denser nodes, and 1 quiz for shorter/focused nodes.
-    #    - Each question MUST have exactly 4 options.
-    #    - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
-    #    - Vary difficulty across EASY, MEDIUM, and HARD, and provide thorough explanations for every answer.
-    
-
-
-    
-    
-    # """
-    # You are an expert Curriculum Engineer and Instructional Designer.
-    # Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
-
-    # CRITICAL INSTRUCTIONS:
-    # 1. TOPOLOGY & KNOWLEDGE GRAPH:
-    #    - Extract the top 4 primary learning concepts as ordered nodes with unique keys ('node_1', 'node_2', 'node_3', 'node_4').
-    #    - Node keys MUST strictly follow lowercase string format ('node_1', 'node_2').
-    #    - Create directed edges (source_node_key -> target_node_key) using exact node keys to define prerequisite learning flow.
-    #    - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
-
-    # 2. NODE QUANTITY & GRANULARITY (TESTING BUDGET):
-    #    - Extract EXACTLY 4 major concept nodes from the PDF material.
-    #    - Group closely related sub-topics into a single comprehensive node rather than creating micro-nodes.
-
-    # 3. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
-    #    - Target Depth Level: University / Rigorous Academic standard.
-    #    - Word Count: Each node summary should be comprehensive (roughly 250 to 450 words).
-    #    - Formatting: Use Markdown with a hybrid structure:
-    #      * A 2-3 sentence overview introducing the core concept.
-    #      * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
-    #      * A short practical example or real-world use-case illustrating the concept in action.
-    #    - Contextual Continuity & Cross-Referencing:
-    #      * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
-    #      * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
-    #    - Augmentation & Enrichment:
-    #      * Include source PDF page references (e.g., "Pages 12-15").
-    #      * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
-    #      * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
-    #      * Do NOT introduce completely unrelated subtopics.
-
-    # 4. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
-    #    - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
-    #    - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
-
-    # 5. QUESTION BANK (FAST TESTING MODE):
-    #    - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
-    #    - Each question MUST have exactly 4 options.
-    #    - `correct_option_index` must be an integer from 0 to 3 matching the zero-based index in `options`.
-    #    - Vary difficulty across EASY, MEDIUM, and HARD.
-    #    - Provide thorough explanations for every answer.
-    # """
-
-
-
-
+    Ingests multiple PDF documents, sends them to Gemini for unified Concept Knowledge Graph extraction,
+    generates 20 quiz questions per node (Set 1 & Set 2), calculates DAG coordinates, and returns DB-ready payload.
+    Supports documents as:
+      - List of dicts: [{"bytes": b"...", "file_name": "...", "mime_type": "application/pdf"}]
+      - List of tuples: [(b"...", "file_name.pdf")]
+      - List of raw bytes: [b"..."]
     """
-    You are an expert Curriculum Engineer and Instructional Designer.
-    Analyze the uploaded PDF material and convert it into a structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
+    if not documents:
+        raise ValueError("At least one document must be provided for graph extraction.")
 
-    CRITICAL INSTRUCTIONS:
-    1. TOPOLOGY & KNOWLEDGE GRAPH:
-       - Extract all major concepts as ordered learning nodes with unique keys ('node_1', 'node_2', ...).
-       - Create directed edges (source_node_key -> target_node_key) indicating strict prerequisite learning order.
-       - Ensure the dependency structure forms a valid Directed Acyclic Graph (DAG) with NO cycles.
-
-    2. NODE CONTENT, AUGMENTATION & FORMATTING (STRICT RULES):
-       - Target Depth Level: University / Rigorous Academic standard.
-       - Word Count: Each node summary MUST be between 250 and 450 words.
-       - Formatting: Use Markdown with a hybrid structure:
-         * A 2-3 sentence overview introducing the core concept.
-         * A section of 3-5 DETAILED bullet points (each bullet being 2-3 sentences with **bold** key terms) explaining internal mechanics, rules, or formulas.
-         * A short practical example or real-world use-case illustrating the concept in action.
-       - Contextual Continuity & Cross-Referencing:
-         * Where logically applicable, explicitly relate the current node's concept back to prerequisite topics established in upstream nodes (e.g., "Building on the concept of [Prerequisite Node Title]...").
-         * Highlight how the current topic extends or applies foundational principles introduced earlier in the DAG.
-       - Augmentation & Enrichment:
-         * Include source PDF page references (e.g., "Pages 12-15").
-         * If the PDF material is brief or incomplete on a topic, ENRICH and AUGMENT the summary using foundational domain knowledge so the node is 100% self-contained.
-         * Fill in missing definitions, step-by-step explanations, and mathematical/logical formulations.
-         * Do NOT introduce completely unrelated subtopics.
-
-    3. YOUTUBE REFERENCES (STRICT ZERO-HALLUCINATION RULE):
-       - DO NOT generate, make up, search for, or hallucinate any YouTube URLs or timestamps.
-       - Set `youtube_url` and `youtube_timestamp_seconds` to NULL for every node UNLESS a specific YouTube link is explicitly written inside the text of the uploaded PDF material.
-
-    4. QUESTION BANK (CRITICAL):
-       - For EVERY concept node, generate EXACTLY 5 multiple choice questions.
-       - Each question MUST have exactly 4 options.
-       - `correct_option_index` must be an integer from 0 to 3 matching the correct string in `options`.
-       - Vary difficulty across EASY, MEDIUM, and HARD.
-       - Provide thorough explanations for every answer.
-       
-    5. NODE GRANULARITY & QUANTITY (CRITICAL):
-       - Analyze the scope and density of the uploaded PDF material.
-       - For short documents (1-5 pages): Extract 2 to 4 major concept nodes.
-       - For medium documents (6-20 pages): Extract 4 to 8 major concept nodes.
-       - For long documents (20+ pages): Extract 8 to 12 major concept nodes.
-       - Do NOT create excessive micro-nodes for minor sub-topics. Group closely related sub-topics into a single comprehensive node.
-    """
+    if not client:
+        raise RuntimeError("Gemini API client is not initialized. Check GEMINI_API_KEY.")
 
     try:
-        # 1. Start timer
         start_time = time.perf_counter()
+        logger.info(f"Sending {len(documents)} document(s) to Gemini for unified Knowledge Graph extraction...")
 
-        print("Sending PDF content to Gemini for Knowledge Graph extraction...")
-        print("Model:", GEMINI_PRIMARY_MODEL)
-        print("PDF bytes:", len(pdf_bytes))
-        print("MIME type:", mime_type)
-        print("PDF header:", repr(pdf_bytes[:8]))
-        response = client.models.generate_content(
-            model=GEMINI_PRIMARY_MODEL,
-            # model="gemini-3.5-flash-lite",
-            contents=[
-                types.Part.from_bytes(data=pdf_bytes, mime_type=mime_type),
-                prompt
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=CourseGraphExtractionSchema,
-                temperature=GEMINI_INGESTION_TEMPERATURE,
-                max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
-                # thinking_config=types.ThinkingConfig(thinking_budget=0,include_thoughts=False)
-            )
-        )
+        parts = []
+        for item in documents:
+            if isinstance(item, dict):
+                data = item["bytes"]
+                m_type = item.get("mime_type", "application/pdf")
+            elif isinstance(item, tuple):
+                data = item[0]
+                m_type = "application/pdf"
+            elif isinstance(item, bytes):
+                data = item
+                m_type = "application/pdf"
+            else:
+                continue
 
-        # 2. Stop timer
-        elapsed_time_seconds = round(time.perf_counter() - start_time, 2)
+            parts.append(types.Part.from_bytes(data=data, mime_type=m_type))
 
-        # 3. Extract Token Usage Stats
+        parts.append(INGESTION_PROMPT)
+
+        candidate_models = get_candidate_generation_models()
+        logger.info(f"Candidate Gemini generation models in priority order: {candidate_models}")
+
+        response = None
+        last_error = None
+        for model_name in candidate_models:
+            try:
+                logger.info(f"Attempting Gemini graph extraction with model: {model_name}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=parts,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=CourseGraphExtractionSchema,
+                        temperature=GEMINI_INGESTION_TEMPERATURE,
+                        max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
+                    )
+                )
+                if response and response.text:
+                    logger.info(f"Successfully generated graph with model: {model_name}")
+                    break
+            except Exception as e:
+                logger.warning(f"Generation attempt with model '{model_name}' failed: {str(e)}")
+                last_error = e
+
+        if not response or not response.text:
+            raise RuntimeError(f"All candidate Gemini models failed. Last error: {str(last_error)}")
+
+        elapsed_time = round(time.perf_counter() - start_time, 2)
         usage = response.usage_metadata
         prompt_tokens = usage.prompt_token_count if usage else 0
         completion_tokens = usage.candidates_token_count if usage else 0
-        total_tokens = usage.total_token_count if usage else 0
-
-        print(
-            f"Gemini Extraction Completed in {elapsed_time_seconds}s | "
-            f"Tokens: Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}"
+        logger.info(
+            f"Gemini Multi-Doc Extraction Completed in {elapsed_time}s | "
+            f"Tokens: Prompt={prompt_tokens}, Completion={completion_tokens}"
         )
-        
+
         raw_data = json.loads(response.text)
 
-        
-        # Enforce exactly 10 questions in each set for every node.
+        # Enforce exactly 10 questions in Set 1 and 10 questions in Set 2
         for node in raw_data.get("nodes", []):
             quizzes = node.get("quizzes", [])
-
-            if len(quizzes) != 20:
-                raise ValueError(
-                    f"Node '{node.get('node_key')}' must have exactly 20 quizzes; "
-                    f"Gemini returned {len(quizzes)}."
-                )
-
             for index, quiz in enumerate(quizzes):
-                # First 10 questions -> Set 1; next 10 -> Set 2.
                 quiz["set_number"] = 1 if index < 10 else 2
 
-            # Log the distribution before saving to the database.
-            set_1_count = sum(q["set_number"] == 1 for q in quizzes)
-            set_2_count = sum(q["set_number"] == 2 for q in quizzes)
-
-            print(
-                f"Node {node.get('node_key')}: "
-                f"Set 1 = {set_1_count}, Set 2 = {set_2_count}"
-            )
-        
-        # --- Map Node Keys for Layout Utility ---
-        # calculate_dag_layout expects nodes as dicts with "id" and edges as (source_id, target_id)
+        # Format node dictionaries for calculate_dag_layout utility
         raw_nodes = raw_data.get("nodes", [])
         raw_edges = raw_data.get("edges", [])
 
-        # Format node dictionaries for calculate_dag_layout utility
         node_dicts_for_layout = []
         for n in raw_nodes:
             node_dicts_for_layout.append({
-                "id": n["node_key"],  # Use node_key as temporary ID for layout calculation
+                "id": n["node_key"],
                 "node_key": n["node_key"],
                 "title": n["title"],
                 "summary": n["summary"],
@@ -348,10 +448,9 @@ def extract_course_graph_from_pdf(
             for e in raw_edges
         ]
 
-        # --- Calculate (x, y) DAG Coordinates ---
+        # Calculate (x, y) DAG Coordinates
         positioned_nodes = calculate_dag_layout(node_dicts_for_layout, edge_tuples)
 
-        # Build final formatted payload matching backend database models
         return {
             "title": raw_data["course_title"],
             "description": raw_data["course_description"],
@@ -366,5 +465,15 @@ def extract_course_graph_from_pdf(
         }
 
     except Exception as e:
-        logger.error(f"Failed to process PDF with Gemini: {str(e)}", exc_info=True)
-        raise RuntimeError(f"Gemini processing error: {str(e)}")
+        logger.error(f"Failed to process documents with Gemini: {str(e)}", exc_info=True)
+        raise RuntimeError(f"Gemini multi-document processing error: {str(e)}")
+
+
+def extract_course_graph_from_pdf(
+    pdf_bytes: bytes, 
+    mime_type: str = "application/pdf"
+) -> Dict[str, Any]:
+    """Single-PDF compatibility wrapper for extract_course_graph_from_multiple_pdfs."""
+    return extract_course_graph_from_multiple_pdfs([
+        {"bytes": pdf_bytes, "file_name": "syllabus.pdf", "mime_type": mime_type}
+    ])

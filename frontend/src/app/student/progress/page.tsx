@@ -4,25 +4,46 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Network, ArrowLeft, CheckCircle2, Lock, Award, BookOpen, BarChart3, ArrowRight } from 'lucide-react';
 import { api } from '@/src/lib/api';
-
 import { Suspense } from 'react';
 
 function StudentProgressContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const courseId = searchParams?.get('courseId') || null;
+  const initialCourseId = searchParams?.get('courseId') || null;
 
+  const [courseId, setCourseId] = useState<string | null>(initialCourseId);
+  const [enrolledCourses, setEnrolledCourses] = useState<any[]>([]);
   const [progressData, setProgressData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Fetch enrolled courses for the dropdown selector
+  useEffect(() => {
+    async function fetchEnrollments() {
+      try {
+        const res = await api.get('/enrollments/me');
+        const list = res.data || [];
+        setEnrolledCourses(list);
+        // If no courseId in URL but user has enrollments, default to the first one
+        if (!courseId && list.length > 0) {
+          setCourseId(list[0].course_id);
+        }
+      } catch (err) {
+        console.warn('Could not fetch enrollments for dropdown');
+      }
+    }
+    fetchEnrollments();
+  }, []);
+
+  // Fetch progress data whenever courseId changes
   useEffect(() => {
     async function fetchStudentProgress() {
       if (!courseId) {
         setLoading(false);
+        setProgressData([]);
         return;
       }
       try {
-        // Connect to live backend endpoint: GET /quizzes/course/{course_id}/progress
+        setLoading(true);
         const response = await api.get(`/quizzes/course/${courseId}/progress`);
         setProgressData(response.data || []);
       } catch (err) {
@@ -41,7 +62,7 @@ function StudentProgressContent() {
 
   const completedCount = progressData.filter(p => p.is_completed).length;
   const totalCount = progressData.length || 1;
-  const overallPercentage = Math.round((completedCount / totalCount) * 100);
+  const overallPercentage = progressData.length > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   return (
     <div className="min-h-screen bg-[#f4f7f4] text-[#1e2923] selection:bg-[#2e5a44] selection:text-white flex flex-col justify-between">
@@ -68,15 +89,33 @@ function StudentProgressContent() {
         
         {/* Header Summary Card */}
         <div className="bg-[#fbfcfb] border border-[#e2eae4] rounded-[32px] p-8 sm:p-10 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="space-y-2">
+          <div className="space-y-3">
             <span className="px-3.5 py-1 bg-[#d3efdc]/60 text-[#112217] border border-[#bce8c9] rounded-full text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5">
               <BarChart3 size={12} /> Performance Analytics
             </span>
             <h1 className="text-2xl sm:text-3xl font-black text-[#112217]">Course Completion Metrics</h1>
             <p className="text-xs text-[#4a6b5d]">Track your node progression, assessment scores, and unlocked knowledge milestones.</p>
+            
+            {/* Course Selector Dropdown */}
+            {enrolledCourses.length > 0 && (
+              <div className="pt-2">
+                <label className="block text-[10px] font-extrabold uppercase tracking-widest text-[#4a6b5d] mb-1">Select Enrolled Course:</label>
+                <select 
+                  value={courseId || ''} 
+                  onChange={(e) => setCourseId(e.target.value)}
+                  className="bg-white border border-[#e2eae4] rounded-xl px-4 py-2 text-xs text-[#112217] font-bold focus:outline-none focus:ring-2 focus:ring-[#2e5a44] shadow-sm"
+                >
+                  {enrolledCourses.map((enr) => (
+                    <option key={enr.course_id} value={enr.course_id}>
+                      {enr.course?.title || enr.course_title || 'Enrolled Course'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
-          <div className="bg-white border border-[#e2eae4] px-6 py-4 rounded-2xl shadow-sm text-center min-w-[160px]">
+          <div className="bg-white border border-[#e2eae4] px-6 py-4 rounded-2xl shadow-sm text-center min-w-[160px] self-center">
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#4a6b5d] block">Overall Completion</span>
             <span className="text-2xl font-black text-[#112217]">{overallPercentage}%</span>
           </div>
@@ -91,7 +130,7 @@ function StudentProgressContent() {
           ) : progressData.length === 0 ? (
             <div className="text-center py-12 space-y-2">
               <p className="text-xs font-bold text-[#112217]">No progress records found for this course.</p>
-              <p className="text-[11px] text-[#4a6b5d]">Select a course from your dashboard to begin tracking metrics.</p>
+              <p className="text-[11px] text-[#4a6b5d]">Please select a valid course from the dropdown above.</p>
             </div>
           ) : (
             <div className="space-y-4">

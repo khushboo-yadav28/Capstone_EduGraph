@@ -1,9 +1,14 @@
 import enum
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import UUID, Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Enum, Float
+from sqlalchemy import UUID, Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Enum, Float, JSON
 from sqlalchemy.orm import relationship
 from app.database import Base
+
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    Vector = None
 
 
 class CourseStatus(str, enum.Enum):
@@ -44,6 +49,44 @@ class Course(Base):
     nodes = relationship("Node", back_populates="course", cascade="all, delete-orphan")
     edges = relationship("Edge", back_populates="course", cascade="all, delete-orphan")
     enrollments = relationship("UserCourseEnrollment", back_populates="course", cascade="all, delete-orphan")
+    documents = relationship("CourseDocument", back_populates="course", cascade="all, delete-orphan")
+    chunks = relationship("DocumentChunk", back_populates="course", cascade="all, delete-orphan")
+
+
+class CourseDocument(Base):
+    """Stores uploaded course documents (PDFs, materials) for RAG and student access."""
+    __tablename__ = "course_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String(100), default="application/pdf", nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    course = relationship("Course", back_populates="documents")
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentChunk(Base):
+    """Text chunks extracted from course documents with embeddings for RAG and doubt resolution."""
+    __tablename__ = "document_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("course_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    page_number = Column(Integer, nullable=True)
+    embedding = Column(Vector(768) if Vector is not None else JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    document = relationship("CourseDocument", back_populates="chunks")
+    course = relationship("Course", back_populates="chunks")
+
 
 class Node(Base):
     __tablename__ = "nodes"

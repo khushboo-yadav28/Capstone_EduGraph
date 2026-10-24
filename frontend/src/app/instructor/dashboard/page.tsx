@@ -172,18 +172,26 @@ export default function InstructorDashboard() {
         setCourseDescription('');
       }, 2000);
     } catch (err: any) {
-      console.error('Error uploading PDF', err);
-      // Fallback close
-      setSuccessMsg(true);
-      await fetchDashboardData();
-      setTimeout(() => {
-        setIsModalOpen(false);
-        setSuccessMsg(false);
-        setStep('create');
-      }, 1500);
+      console.warn('Error uploading PDF:', err);
+      const detail = err.response?.data?.detail || err.message || 'Failed to ingest PDF into course.';
+      setStatusMessage({ 
+        type: 'error', 
+        text: detail 
+      });
+      setIsModalOpen(false);
+      setSuccessMsg(false);
+      setStep('create');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOpenUploadForDraft = (courseId: string) => {
+    setCreatedCourseId(courseId);
+    setStep('upload');
+    setSelectedFile(null);
+    setSuccessMsg(false);
+    setIsModalOpen(true);
   };
 
   // Publish Draft Course Endpoint
@@ -195,7 +203,7 @@ export default function InstructorDashboard() {
       setStatusMessage({ type: 'success', text: 'Course published successfully to public catalog!' });
       await fetchDashboardData();
     } catch (err: any) {
-      console.error('Error publishing course:', err);
+      console.warn('Publish course validation error:', err.response?.data?.detail || err.message);
       setStatusMessage({ 
         type: 'error', 
         text: err.response?.data?.detail || 'Failed to publish course. Ensure it has learning nodes generated.' 
@@ -398,18 +406,41 @@ export default function InstructorDashboard() {
                       className="flex flex-col sm:flex-row sm:items-center justify-between p-4.5 rounded-2xl border border-[#e2eae4] bg-white hover:border-[#2e5a44] transition shadow-sm gap-4"
                     >
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-[#112217]">{course.title}</span>
                           <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
                             Draft Shell
                           </span>
+                          {(course as any).nodes_count === 0 ? (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1">
+                              <AlertCircle size={10} /> 0 Nodes (Upload PDF Required)
+                            </span>
+                          ) : (course as any).nodes_count > 0 ? (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-lg bg-[#d3efdc] text-[#2e5a44] border border-[#bce8c9]">
+                              {(course as any).nodes_count} Nodes Ready
+                            </span>
+                          ) : null}
                         </div>
                         <p className="text-[11px] text-[#4a6b5d] line-clamp-1">
-                          {course.description || 'Draft knowledge graph awaiting final node layout confirmation and publishing.'}
+                          {course.description || 'Draft knowledge graph awaiting syllabus PDF ingestion or node layout confirmation.'}
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                        {/* Ingest / Upload Syllabus PDF to Draft */}
+                        <button 
+                          onClick={() => handleOpenUploadForDraft(course.id)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                            (course as any).nodes_count === 0
+                              ? 'bg-[#2e5a44] text-white hover:bg-[#223d2f] ring-2 ring-[#2e5a44]/30'
+                              : 'bg-white border border-[#2e5a44] text-[#2e5a44] hover:bg-[#d3efdc]/30'
+                          }`}
+                          title="Upload syllabus PDF to extract knowledge graph nodes"
+                        >
+                          <Upload size={13} />
+                          <span>Upload PDF</span>
+                        </button>
+
                         {/* Open Advanced Graph Editor Button */}
                         <button 
                           onClick={() => router.push(`/instructor/course/${course.id}`)}
@@ -422,10 +453,23 @@ export default function InstructorDashboard() {
 
                         {/* Publish Course Button (PUT /courses/{id}/publish) */}
                         <button 
-                          onClick={() => handlePublishCourse(course.id)}
+                          onClick={() => {
+                            if ((course as any).nodes_count === 0) {
+                              setStatusMessage({
+                                type: 'error',
+                                text: `Cannot publish "${course.title}": This course has 0 learning nodes. Please click 'Upload PDF' to generate the knowledge graph first.`
+                              });
+                              return;
+                            }
+                            handlePublishCourse(course.id);
+                          }}
                           disabled={actionLoading === course.id}
-                          className="px-3.5 py-2 bg-[#2e5a44] text-white rounded-xl text-xs font-bold hover:bg-[#244735] transition flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
-                          title="Publish course so students can discover and enroll"
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                            (course as any).nodes_count === 0
+                              ? 'bg-slate-300 text-slate-600 hover:bg-slate-400'
+                              : 'bg-[#2e5a44] text-white hover:bg-[#244735]'
+                          } disabled:opacity-50`}
+                          title={(course as any).nodes_count === 0 ? "Upload a PDF first to generate nodes" : "Publish course to public catalog"}
                         >
                           {actionLoading === course.id ? (
                             <Loader2 size={13} className="animate-spin" />

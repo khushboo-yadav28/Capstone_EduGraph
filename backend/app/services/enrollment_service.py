@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.course import UserCourseEnrollment, EnrollmentStatus, Course, Node, Edge, Badge
@@ -64,7 +64,7 @@ def enroll_student(db: Session, student_id: UUID, course_id: UUID) -> UserCourse
 
 
 def update_course_progress_and_badge(db: Session, student_id: UUID, course_id: UUID) -> UserCourseEnrollment:
-    """Calculates overall progress % and issues a completion badge when 100% is reached."""
+    """Calculates overall progress % and automatically issues a completion badge and certificate eligibility when 100% is reached."""
     enrollment = (
         db.query(UserCourseEnrollment)
         .filter(
@@ -96,19 +96,26 @@ def update_course_progress_and_badge(db: Session, student_id: UUID, course_id: U
     progress_pct = (completed_count / total_nodes) * 100.0
     enrollment.progress_percentage = round(progress_pct, 2)
 
-    # 100% Completion Check
-    if progress_pct >= 100.0 and enrollment.status != EnrollmentStatus.COMPLETED:
-        enrollment.status = EnrollmentStatus.COMPLETED
-        enrollment.completed_at = datetime.now(timezone.utc)
+    # 100% Completion Check: Auto-issue Badge and mark course Completed
+    if progress_pct >= 100.0:
+        if enrollment.status != EnrollmentStatus.COMPLETED:
+            enrollment.status = EnrollmentStatus.COMPLETED
+            if not enrollment.completed_at:
+                enrollment.completed_at = datetime.now(timezone.utc)
 
-        # Auto-issue Badge
-        course = db.query(Course).filter(Course.id == course_id).first()
-        badge = Badge(
-            enrollment_id=enrollment.id,
-            badge_title=f"Master of {course.title}",
-            badge_image_url=f"https://cdn.edugraph.com/badges/{course.id}.png"
-        )
-        db.add(badge)
+        # Auto-issue Badge if not already created
+        existing_badge = db.query(Badge).filter(Badge.enrollment_id == enrollment.id).first()
+        if not existing_badge:
+            course = db.query(Course).filter(Course.id == course_id).first()
+            badge_title = f"Master of {course.title}" if course else "Course Completion Badge"
+            badge = Badge(
+                id=uuid4(),
+                enrollment_id=enrollment.id,
+                badge_title=badge_title,
+                badge_image_url="/default-badge.png",
+                issued_at=datetime.now(timezone.utc)
+            )
+            db.add(badge)
 
     db.commit()
     db.refresh(enrollment)

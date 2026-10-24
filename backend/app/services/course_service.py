@@ -3,9 +3,8 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
-from app.models.course import Course, CourseStatus, Category, UserCourseEnrollment
+from app.models.course import Course, CourseStatus, Category, UserCourseEnrollment, CourseDocument, DocumentChunk, Node, Edge
 from app.models.user import User, UserRole
-from app.models.course import Node, Edge
 from app.models.quiz import Quiz
 from app.schemas.course import CourseCreate, CategoryCreate
 
@@ -85,16 +84,6 @@ def get_course_by_id(db: Session, course_id: UUID) -> Course:
         )
     return course
 
-
-# def get_published_courses(db: Session, skip: int = 0, limit: int = 20) -> List[Course]:
-#     """Retrieves all public/published courses for student browsing."""
-#     return (
-#         db.query(Course)
-#         .filter(Course.status == CourseStatus.PUBLISHED)
-#         .offset(skip)
-#         .limit(limit)
-#         .all()
-#     )
 
 def get_published_courses_with_search(
     db: Session,
@@ -259,6 +248,7 @@ def delete_course(db: Session, course_id: UUID, current_user: User) -> None:
     db.delete(course)
     db.commit()
 
+
 def save_generated_graph_to_course(
     db: Session, 
     course_id: UUID, 
@@ -267,6 +257,7 @@ def save_generated_graph_to_course(
 ) -> Course:
     """
     Saves Gemini-generated nodes, edges, and quizzes into the database for a specific course.
+    Safely clears previous graph nodes and edges if re-ingesting materials.
     """
     course = get_course_by_id(db, course_id)
 
@@ -276,13 +267,22 @@ def save_generated_graph_to_course(
             detail="You do not have permission to modify this course."
         )
 
-    # 1. Update Course Title and Description if updated by extraction
+    # 1. Update Course Title and Description if provided by extraction
     if graph_data.get("title"):
         course.title = graph_data["title"]
     if graph_data.get("description"):
         course.description = graph_data["description"]
 
-    # 2. Add Nodes and their Quizzes
+    # 2. Clear existing edges and nodes if re-ingesting graph
+    db.query(Edge).filter(Edge.course_id == course.id).delete()
+    existing_nodes = db.query(Node).filter(Node.course_id == course.id).all()
+    if existing_nodes:
+        node_ids = [n.id for n in existing_nodes]
+        db.query(Quiz).filter(Quiz.node_id.in_(node_ids)).delete(synchronize_session=False)
+        db.query(Node).filter(Node.course_id == course.id).delete(synchronize_session=False)
+    db.flush()
+
+    # 3. Add Nodes and their Quizzes
     node_key_to_model_map = {}
     for node_dict in graph_data.get("nodes", []):
         new_node = Node(
@@ -300,7 +300,7 @@ def save_generated_graph_to_course(
         db.flush()  # Assigns primary key UUID to new_node.id
         node_key_to_model_map[new_node.node_key] = new_node
 
-        # Save 20 Quizzes per Node
+        # Save Quizzes per Node (supports Set 1 & Set 2)
         for quiz_dict in node_dict.get("quizzes", []):
             new_quiz = Quiz(
                 node_id=new_node.id,
@@ -313,7 +313,7 @@ def save_generated_graph_to_course(
             )
             db.add(new_quiz)
 
-    # 3. Add Edges
+    # 4. Add Edges
     for edge_dict in graph_data.get("edges", []):
         new_edge = Edge(
             course_id=course.id,
@@ -326,15 +326,16 @@ def save_generated_graph_to_course(
     db.refresh(course)
     return course
 
+
 def get_instructor_draft_courses(db: Session, current_user: User) -> List[Course]:
     """Retrieves all draft courses created by the specific logged-in instructor."""
-    if current_user.role != UserRole.INSTRUCTOR:
+    if current_user.role != UserRole.INSTRUCTOR and current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only instructors can view draft courses."
         )
 
-    return (
+    courses = (
         db.query(Course)
         .options(joinedload(Course.category), joinedload(Course.nodes))
         .filter(
@@ -344,6 +345,10 @@ def get_instructor_draft_courses(db: Session, current_user: User) -> List[Course
         .order_by(Course.created_at.desc())
         .all()
     )
+    for c in courses:
+        c.nodes_count = len(c.nodes) if c.nodes else 0
+    return courses
+
 
 def update_instructor_course_graph(
     db: Session, 
@@ -367,7 +372,6 @@ def update_instructor_course_graph(
         course.description = graph_data["course_description"]
 
     # 3. Update the separate rows in the 'nodes' table
-    # course.nodes gives you access to all Node records tied to this course_id
     existing_nodes_map = {str(n.id): n for n in course.nodes}
     existing_keys_map = {n.node_key: n for n in course.nodes}
 
@@ -403,3 +407,175 @@ def update_instructor_course_graph(
     db.commit()
     db.refresh(course)
     return course
+
+
+# --- Course Document & RAG Services ---
+def save_course_document(
+    db: Session,
+    course_id: UUID,
+    file_name: str,
+    file_path: str,
+    file_size: Optional[int] = None,
+    mime_type: str = "application/pdf"
+) -> CourseDocument:
+    """Records an uploaded document in the course_documents table."""
+    doc = CourseDocument(
+        course_id=course_id,
+        file_name=file_name,
+        file_path=file_path,
+        file_size=file_size,
+        mime_type=mime_type
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def save_document_chunks(
+    db: Session,
+    document_id: UUID,
+    course_id: UUID,
+    chunks: List[Dict[str, Any]]
+) -> List[DocumentChunk]:
+    """Persists extracted text chunks and embeddings into document_chunks table."""
+    chunk_objects = []
+    for chunk in chunks:
+        raw_emb = chunk.get("embedding")
+        if raw_emb is not None and isinstance(raw_emb, list):
+            if len(raw_emb) > 768:
+                raw_emb = raw_emb[:768]
+            elif len(raw_emb) < 768:
+                raw_emb = raw_emb + [0.0] * (768 - len(raw_emb))
+
+        doc_chunk = DocumentChunk(
+            document_id=document_id,
+            course_id=course_id,
+            chunk_index=chunk.get("chunk_index", 0),
+            content=chunk.get("content", ""),
+            page_number=chunk.get("page_number"),
+            embedding=raw_emb
+        )
+        db.add(doc_chunk)
+        chunk_objects.append(doc_chunk)
+    db.commit()
+    return chunk_objects
+
+
+def get_course_documents(db: Session, course_id: UUID) -> List[CourseDocument]:
+    """Retrieves all documents associated with a course."""
+    return (
+        db.query(CourseDocument)
+        .filter(CourseDocument.course_id == course_id)
+        .order_by(CourseDocument.uploaded_at.desc())
+        .all()
+    )
+
+
+def get_course_document_by_id(db: Session, course_id: UUID, document_id: UUID) -> Optional[CourseDocument]:
+    """Retrieves a specific document belonging to a course."""
+    return (
+        db.query(CourseDocument)
+        .filter(CourseDocument.course_id == course_id, CourseDocument.id == document_id)
+        .first()
+    )
+
+
+def validate_user_course_access(db: Session, course_id: UUID, current_user: User) -> bool:
+    """
+    Checks if a user has access to a course (admin, course instructor, or enrolled student).
+    Raises HTTPException(403) or HTTPException(404) if access is denied.
+    """
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Course not found."
+        )
+
+    if current_user.role == UserRole.ADMIN or course.instructor_id == current_user.id:
+        return True
+
+    enrollment = db.query(UserCourseEnrollment).filter(
+        UserCourseEnrollment.course_id == course_id,
+        UserCourseEnrollment.student_id == current_user.id
+    ).first()
+
+    if not enrollment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be enrolled in this course to access its documents and materials."
+        )
+
+    return True
+
+
+def get_node_rag_context(db: Session, node_id: UUID, current_user: User) -> Dict[str, Any]:
+    """
+    Retrieves RAG context (summary + source document chunk excerpts) for a given learning node.
+    Used for student workspace doubt resolution and contextual reference.
+    """
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Learning node not found."
+        )
+
+    # Validate user enrollment / ownership
+    validate_user_course_access(db, node.course_id, current_user)
+
+    references = []
+    
+    # 1. Match chunks by page_references if available
+    if node.page_references:
+        target_pages = []
+        if isinstance(node.page_references, list):
+            target_pages = [int(p) for p in node.page_references if str(p).isdigit()]
+        elif isinstance(node.page_references, int):
+            target_pages = [node.page_references]
+
+        if target_pages:
+            chunks = (
+                db.query(DocumentChunk)
+                .options(joinedload(DocumentChunk.document))
+                .filter(
+                    DocumentChunk.course_id == node.course_id,
+                    DocumentChunk.page_number.in_(target_pages)
+                )
+                .limit(5)
+                .all()
+            )
+            for c in chunks:
+                doc_name = c.document.file_name if c.document else "Course Document"
+                references.append({
+                    "type": "PDF",
+                    "document_name": doc_name,
+                    "page": c.page_number,
+                    "content": c.content[:500] if c.content else ""
+                })
+
+    # 2. Fallback: if no page references or chunks found, fetch top chunks for the course
+    if not references:
+        chunks = (
+            db.query(DocumentChunk)
+            .options(joinedload(DocumentChunk.document))
+            .filter(DocumentChunk.course_id == node.course_id)
+            .limit(3)
+            .all()
+        )
+        for c in chunks:
+            doc_name = c.document.file_name if c.document else "Course Document"
+            references.append({
+                "type": "PDF",
+                "document_name": doc_name,
+                "page": c.page_number,
+                "content": c.content[:500] if c.content else ""
+            })
+
+    return {
+        "node_id": str(node.id),
+        "node_title": node.title,
+        "summary": node.summary,
+        "references": references
+    }

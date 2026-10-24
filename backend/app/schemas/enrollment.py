@@ -16,8 +16,11 @@ class CourseMiniResponse(BaseModel):
 class BadgeResponse(BaseModel):
     id: UUID
     enrollment_id: int
+    course_id: Optional[UUID] = None
+    course_title: Optional[str] = None
     badge_title: str = Field(..., example="Master of Python Fundamentals")
     badge_image_url: Optional[str] = Field(None, example="https://cdn.edugraph.com/badges/python-101.png")
+    certificate_url: Optional[str] = None
     issued_at: datetime
 
     class Config:

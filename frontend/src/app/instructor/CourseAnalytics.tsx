@@ -1,0 +1,97 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { api } from '@/src/lib/api';
+import { BarChart3, Loader2, AlertCircle, CheckCircle2, BookOpen } from 'lucide-react';
+
+interface CourseAnalyticsProps {
+  courseId: string;
+}
+
+export default function CourseAnalytics({ courseId }: CourseAnalyticsProps) {
+  const [analyticsData, setAnalyticsData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        setLoading(true);
+        // GET /courses/instructor/{course_id}/analytics
+        const response = await api.get(`/courses/instructor/${courseId}/analytics`);
+        setAnalyticsData(response.data);
+      } catch (err: any) {
+        console.error('Failed to load instructor analytics:', err);
+        setError(err.response?.data?.detail || 'Failed to fetch course analytics data.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (courseId) {
+      fetchAnalytics();
+    }
+  }, [courseId]);
+
+  if (loading) {
+    return (
+      <div className="p-12 text-center text-[#4a6b5d]">
+        <Loader2 className="animate-spin text-[#2e5a44] mx-auto mb-2" size={24} />
+        Loading course heatmap analytics...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-2xl font-bold flex items-center gap-2">
+        <AlertCircle size={16} />
+        <span>{error}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-[#fbfcfb] border border-[#e2eae4] rounded-[32px] p-8 shadow-sm space-y-6">
+      <div className="flex items-center justify-between border-b border-[#e2eae4] pb-5">
+        <div>
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44]">INSTRUCTOR INSIGHTS</span>
+          <h3 className="text-sm font-black text-[#112217]">Student Node Clearance & Heatmap Analytics</h3>
+        </div>
+        <div className="w-10 h-10 rounded-2xl bg-[#d3efdc]/50 text-[#2e5a44] flex items-center justify-center font-bold">
+          <BarChart3 size={20} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Render analytics breakdown returned from backend */}
+        {analyticsData && Object.keys(analyticsData).length > 0 ? (
+          Object.entries(analyticsData).map(([nodeName, stats]: [string, any], index) => (
+            <div key={index} className="bg-white border border-[#e2eae4] rounded-2xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-[#112217]">{nodeName}</span>
+                <span className="text-[10px] font-extrabold px-2.5 py-1 bg-[#d3efdc]/60 text-[#2e5a44] rounded-xl">
+                  {stats.clearance_percentage || 0}% Cleared
+                </span>
+              </div>
+              <div className="w-full bg-[#f4f7f4] h-2.5 rounded-full overflow-hidden">
+                <div 
+                  className="bg-[#2e5a44] h-full rounded-full transition-all duration-500" 
+                  style={{ width: `${stats.clearance_percentage || 0}%` }}
+                ></div>
+              </div>
+              <div className="flex justify-between text-[10px] text-[#4a6b5d] font-bold">
+                <span>Cleared Students: {stats.cleared_count ?? 'N/A'}</span>
+                <span>Total Enrolled: {stats.total_students ?? 'N/A'}</span>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="col-span-2 p-8 text-center text-xs text-[#4a6b5d] border border-dashed border-[#e2eae4] rounded-2xl">
+            No analytics metrics available for this course yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

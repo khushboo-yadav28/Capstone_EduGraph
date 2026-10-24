@@ -1,19 +1,38 @@
-# app/api/v1/endpoints/courses.py
+# app/api/courses.py
+from datetime import datetime
+from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.course import CourseCreate, CourseDetailResponse, CourseResponse, CategoryCreate, CategoryResponse
-from app.services import course_service
-from app.services.gemini_service import extract_course_graph_from_pdf
-from app.core.security import get_current_user, require_roles
-from app.schemas.node_graph import CourseGraphResponse,GraphNodeResponse,GraphEdgeResponse,NodeProgressStatus
+from app.models.course import Category, Course, CourseStatus, Edge, Node, UserCourseEnrollment, CourseDocument, DocumentChunk
 from app.models.quiz import QuizAttempt, StudentProgress
-from app.models.course import Category, Course, CourseStatus, Edge, Node, UserCourseEnrollment
+from app.schemas.course import (
+    CourseCreate,
+    CourseDetailResponse,
+    CourseResponse,
+    CategoryCreate,
+    CategoryResponse,
+    CourseDocumentResponse,
+    CourseDocumentListResponse,
+    RAGContextResponse,
+)
+from app.services import course_service
+from app.services.gemini_service import (
+    extract_course_graph_from_pdf,
+    extract_course_graph_from_multiple_pdfs,
+    extract_text_chunks_from_pdf,
+    generate_embeddings_for_chunks,
+)
+from app.core.security import get_current_user, require_roles
+from app.schemas.node_graph import CourseGraphResponse, GraphNodeResponse, GraphEdgeResponse, NodeProgressStatus
 
 router = APIRouter(prefix="/courses", tags=["Courses & Graph"])
 
@@ -34,6 +53,7 @@ def get_categories_endpoint(db: Session = Depends(get_db)):
     """Retrieves all course categories (Public)."""
     return course_service.get_all_categories(db)
 
+
 @router.get("/admin/stats")
 def get_admin_dashboard_stats(
     db: Session = Depends(get_db),
@@ -41,7 +61,7 @@ def get_admin_dashboard_stats(
 ):
     """Returns dynamic counts for the Admin Dashboard."""
     total_users = db.query(User).filter(User.is_active == True).count()
-    total_categories = db.query(Category).count() if 'Category' in globals() else 0
+    total_categories = db.query(Category).count()
     total_courses = db.query(Course).filter(Course.status == CourseStatus.PUBLISHED).count()
     
     return {
@@ -65,28 +85,97 @@ def create_course_endpoint(
 @router.post("/{course_id}/ingest-pdf", response_model=CourseResponse)
 async def ingest_pdf_to_course(
     course_id: UUID,
-    file: UploadFile = File(...),
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
     """
-    Uploads PDF and extracts graph nodes, edges, & quizzes into PostgreSQL (Instructors & Admins only).
+    Uploads single or multiple PDF documents, saves them securely to backend storage,
+    records CourseDocument records, chunks & generates embeddings for RAG,
+    and extracts knowledge graph nodes, edges, & quizzes into PostgreSQL.
     """
-    if file.content_type != "application/pdf":
+    # Verify course existence and permissions
+    course = course_service.get_course_by_id(db, course_id)
+    if course.instructor_id != current_user.id and current_user.role != UserRole.ADMIN:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are supported."
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify this course."
         )
 
-    pdf_bytes = await file.read()
-    if not pdf_bytes:
+    # Collect uploaded files (supporting both multi-file 'files' and legacy 'file')
+    upload_list: List[UploadFile] = []
+    if files:
+        upload_list.extend(files)
+    if file:
+        upload_list.append(file)
+
+    if not upload_list:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty."
+            detail="At least one PDF file must be provided."
         )
 
-    graph_data = extract_course_graph_from_pdf(pdf_bytes, mime_type=file.content_type)
+    # Prepare storage directory for course materials
+    course_upload_dir = settings.UPLOAD_DIR / str(course_id)
+    course_upload_dir.mkdir(parents=True, exist_ok=True)
 
+    pdf_payloads: List[tuple[bytes, str]] = []
+
+    for upload_file in upload_list:
+        clean_filename = Path(upload_file.filename).name
+        # Sanitize filename
+        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', clean_filename)
+        if not safe_filename.lower().endswith(".pdf"):
+            safe_filename += ".pdf"
+
+        pdf_bytes = await upload_file.read()
+        if not pdf_bytes:
+            continue
+
+        target_path = course_upload_dir / safe_filename
+        with open(target_path, "wb") as f_out:
+            f_out.write(pdf_bytes)
+
+        # 1. Record CourseDocument in DB
+        course_doc = course_service.save_course_document(
+            db=db,
+            course_id=course_id,
+            file_name=clean_filename,
+            file_path=str(target_path),
+            file_size=len(pdf_bytes),
+            mime_type="application/pdf"
+        )
+
+        # 2. Extract text chunks & compute embeddings for RAG
+        chunks = extract_text_chunks_from_pdf(pdf_bytes, document_name=clean_filename, chunk_size=1000, chunk_overlap=150)
+        if chunks:
+            embedded_chunks = generate_embeddings_for_chunks(chunks)
+            course_service.save_document_chunks(
+                db=db,
+                document_id=course_doc.id,
+                course_id=course_id,
+                chunks=embedded_chunks
+            )
+
+        pdf_payloads.append((pdf_bytes, clean_filename))
+
+    if not pdf_payloads:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="None of the uploaded files contained valid PDF data."
+        )
+
+    # 3. Antigravity Pipeline: Extract knowledge graph and quizzes from all uploaded PDFs
+    try:
+        graph_data = extract_course_graph_from_multiple_pdfs(pdf_payloads)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Knowledge graph extraction error: {str(e)}"
+        )
+
+    # 4. Save generated graph to course
     updated_course = course_service.save_generated_graph_to_course(
         db=db,
         course_id=course_id,
@@ -97,14 +186,88 @@ async def ingest_pdf_to_course(
     return updated_course
 
 
-# @router.get("/published", response_model=List[CourseResponse])
-# def list_published_courses(
-#     skip: int = 0,
-#     limit: int = 20,
-#     db: Session = Depends(get_db)
-# ):
-#     """Retrieves published courses for student discovery (Public)."""
-#     return course_service.get_published_courses(db, skip=skip, limit=limit)
+# --- Student & Course Document Access Endpoints ---
+@router.get("/{course_id}/documents", response_model=CourseDocumentListResponse)
+def list_course_documents(
+    course_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns the list of uploaded PDF course documents for enrolled students,
+    instructors, or administrators. Validates enrollment/access authorization.
+    """
+    course_service.validate_user_course_access(db, course_id, current_user)
+    documents = course_service.get_course_documents(db, course_id)
+
+    docs_response = [
+        CourseDocumentResponse(
+            id=doc.id,
+            course_id=doc.course_id,
+            file_name=doc.file_name,
+            file_path=doc.file_path,
+            file_size=doc.file_size,
+            mime_type=doc.mime_type,
+            uploaded_at=doc.uploaded_at,
+            download_url=f"/api/v1/courses/{course_id}/documents/{doc.id}/download"
+        )
+        for doc in documents
+    ]
+
+    return CourseDocumentListResponse(
+        course_id=course_id,
+        total_count=len(docs_response),
+        documents=docs_response
+    )
+
+
+@router.get("/{course_id}/documents/{document_id}/download")
+def download_course_document(
+    course_id: UUID,
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Securely streams a course PDF document for student viewing or downloading.
+    Validates user enrollment or instructional permissions before serving file.
+    """
+    course_service.validate_user_course_access(db, course_id, current_user)
+
+    doc = course_service.get_course_document_by_id(db, course_id, document_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found."
+        )
+
+    file_path = Path(doc.file_path)
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document file does not exist on server storage."
+        )
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=doc.mime_type or "application/pdf",
+        filename=doc.file_name
+    )
+
+
+@router.get("/node/{node_id}/rag-context", response_model=RAGContextResponse)
+def get_node_rag_context_endpoint(
+    node_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retrieves RAG reference chunks and excerpts for a learning node.
+    Used for student doubt resolution and contextual reference in the learning workspace.
+    """
+    context_data = course_service.get_node_rag_context(db, node_id, current_user)
+    return RAGContextResponse(**context_data)
+
 
 @router.get("/published", response_model=List[CourseDetailResponse])
 def list_published_courses(
@@ -140,6 +303,7 @@ def get_public_course_details(
     """
     return course_service.get_single_course_public_details(db, course_id)
 
+
 @router.get("/{course_id}", response_model=CourseResponse)
 def get_course_details(
     course_id: UUID,
@@ -153,7 +317,7 @@ def get_course_details(
 def publish_course_endpoint(
     course_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.INSTRUCTOR))
+    current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
     """Publishes a course draft (Owner Instructor only)."""
     return course_service.publish_course(db, course_id, current_user)
@@ -288,8 +452,8 @@ def get_instructor_course_graph(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Optional: Verify user role and course ownership
-    if current_user.role != UserRole.INSTRUCTOR:
+    # Verify user role and course ownership
+    if current_user.role != UserRole.INSTRUCTOR and current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Not authorized")
 
     course = db.query(Course).options(
@@ -308,10 +472,12 @@ def get_instructor_course_graph(
         quizzes_data = [
             {
                 "id": str(q.id),
+                "set_number": q.set_number,
                 "question": q.question_text,
                 "options": q.options,
-                "correct_answer": getattr(q, "correct_answer", None),
-                "explanation": getattr(q, "explanation", None)
+                "correct_option_index": q.correct_option_index,
+                "explanation": q.explanation,
+                "difficulty": q.difficulty
             }
             for q in n.quizzes
         ]
@@ -336,7 +502,6 @@ def get_instructor_course_graph(
         "nodes": formatted_nodes,
         "edges": [
             {
-                # "id": e.id,
                 "id": str(e.id) if hasattr(e, "id") else f"edge-{e.source_node_key}-{e.target_node_key}",
                 "source_node_key": e.source_node_key,
                 "target_node_key": e.target_node_key,
@@ -357,6 +522,7 @@ def list_instructor_drafts(
     """
     return course_service.get_instructor_draft_courses(db=db, current_user=current_user)
 
+
 @router.put("/instructor/{course_id}/graph", response_model=Dict[str, Any])
 def update_instructor_course_graph_endpoint(
     course_id: UUID,
@@ -376,6 +542,7 @@ def update_instructor_course_graph_endpoint(
     )
     return {"message": "Course graph updated successfully", "course_id": str(updated_course.id)}
 
+
 @router.get("/instructor/{course_id}/analytics", response_model=Dict[str, Any])
 def get_instructor_course_analytics(
     course_id: UUID,
@@ -386,7 +553,6 @@ def get_instructor_course_analytics(
     Returns heatmap analytics for an instructor showing student node clearance 
     counts and percentages across all nodes in a course.
     """
-    # 1. Verify Instructor Role and Course Ownership/Existence
     if current_user.role not in [UserRole.INSTRUCTOR, UserRole.ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -400,32 +566,27 @@ def get_instructor_course_analytics(
             detail="Course not found."
         )
 
-    # 2. Get Total Enrolled Students Count for this Course
+    # Total Enrolled Students Count for this Course
     total_enrolled_students = db.query(func.count(UserCourseEnrollment.id)).filter(
         UserCourseEnrollment.course_id == course_id
     ).scalar() or 0
 
-    # 3. Fetch all nodes for this course
+    # Fetch all nodes for this course
     nodes = db.query(Node).filter(Node.course_id == course_id).all()
     node_analytics = []
 
     for node in nodes:
-        # Count how many unique students have marked this node as completed 
-        # (meaning they passed both Set 1 and Set 2 per your StudentProgress model)
         cleared_students_count = db.query(func.count(StudentProgress.id)).filter(
             StudentProgress.node_id == node.id,
             StudentProgress.is_completed == True
         ).scalar() or 0
 
-        # Calculate Clearance Percentage
         clearance_percentage = (
             round((cleared_students_count / total_enrolled_students) * 100.0, 2)
             if total_enrolled_students > 0
             else 0.0
         )
 
-        # Determine Heatmap status based on your 60% rule
-        # >= 60% -> "GREEN" (performing well), < 60% -> "RED" (lacking / struggling)
         heatmap_status = "GREEN" if clearance_percentage >= 60.0 else "RED"
 
         node_analytics.append({

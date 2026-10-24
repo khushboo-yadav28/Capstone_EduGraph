@@ -14,59 +14,95 @@ import {
   ArrowRight,
   Bell,
   LogOut,
-  Sparkles
+  Sparkles,
+  Award,
+  Loader2,
+  CheckCircle2,
+  X,
+  Download,
+  ExternalLink
 } from 'lucide-react';
 import { api } from '@/src/lib/api';
+
+interface Badge {
+  id: string;
+  enrollment_id: number;
+  course_id?: string;
+  course_title?: string;
+  badge_title: string;
+  badge_image_url: string;
+  issued_at: string;
+}
 
 export default function StudentDashboard() {
   const router = useRouter();
   const [enrollments, setEnrollments] = useState<any[]>([]);
+  const [badges, setBadges] = useState<Badge[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [badgesLoading, setBadgesLoading] = useState(true);
   const [overallProgress, setOverallProgress] = useState(0);
 
+  // Modal State for Badge Preview
+  const [selectedBadge, setSelectedBadge] = useState<Badge | null>(null);
+
   useEffect(() => {
-    async function fetchEnrollments() {
+    async function fetchDashboardData() {
       try {
-        const response = await api.get('/enrollments/me');
-        if (response.data && response.data.length > 0) {
-          setEnrollments(response.data);
-          calculateAverageProgress(response.data);
-        } else {
-          throw new Error('No live enrollments returned');
-        }
-      } catch (err) {
-        // Fallback mock structure aligned with your backend and demo needs
-        const mockEnrollments = [
-          {
-            id: 1,
-            course_id: '5208c480-174a-4767-981e-35d8d38cb5ca',
-            progress_percentage: 45,
-            course: { title: 'Advanced Data Science and Programming Essentials with Python' },
-            category: 'AI & Data Science'
-          },
-          {
-            id: 2,
-            course_id: '4598b62a-000e-40b6-951c-1a377c667e56',
-            progress_percentage: 75,
-            course: { title: 'Data Warehousing and Data Mining - Fundamentals' },
-            category: 'Data Engineering'
-          },
-          {
-            id: 3,
-            course_id: '38ef3435-a4c8-485e-9199-13556f896be0',
-            progress_percentage: 90,
-            course: { title: 'Introduction to Blockchain Technology' },
-            category: 'Blockchain'
+        setLoading(true);
+        // Fetch enrollments
+        try {
+          const response = await api.get('/enrollments/me');
+          if (response.data && response.data.length > 0) {
+            setEnrollments(response.data);
+            calculateAverageProgress(response.data);
+          } else {
+            throw new Error('No live enrollments returned');
           }
-        ];
-        setEnrollments(mockEnrollments);
-        calculateAverageProgress(mockEnrollments);
+        } catch (err) {
+          // Fallback mock structure
+          const mockEnrollments = [
+            {
+              id: 1,
+              course_id: '5208c480-174a-4767-981e-35d8d38cb5ca',
+              progress_percentage: 45,
+              course: { title: 'Advanced Data Science and Programming Essentials with Python' },
+              category: 'AI & Data Science'
+            },
+            {
+              id: 2,
+              course_id: '4598b62a-000e-40b6-951c-1a377c667e56',
+              progress_percentage: 75,
+              course: { title: 'Data Warehousing and Data Mining - Fundamentals' },
+              category: 'Data Engineering'
+            },
+            {
+              id: 3,
+              course_id: '38ef3435-a4c8-485e-9199-13556f896be0',
+              progress_percentage: 90,
+              course: { title: 'Introduction to Blockchain Technology' },
+              category: 'Blockchain'
+            }
+          ];
+          setEnrollments(mockEnrollments);
+          calculateAverageProgress(mockEnrollments);
+        }
+
+        // Fetch earned badges (GET /enrollments/badges/me)
+        try {
+          const badgeRes = await api.get('/enrollments/badges/me');
+          setBadges(badgeRes.data || []);
+        } catch (badgeErr) {
+          console.warn('Failed to fetch badges, falling back to empty state:', badgeErr);
+          setBadges([]);
+        }
+
       } finally {
         setLoading(false);
+        setBadgesLoading(false);
       }
     }
-    fetchEnrollments();
+    fetchDashboardData();
   }, []);
 
   const calculateAverageProgress = (data: any[]) => {
@@ -79,6 +115,28 @@ export default function StudentDashboard() {
     localStorage.removeItem('token');
     sessionStorage.clear();
     router.push('/login');
+  };
+
+  const handleDownloadCertificate = async (courseId?: string, courseTitle?: string) => {
+    if (!courseId) {
+      alert('Certificate ID not associated with this badge.');
+      return;
+    }
+    try {
+      const response = await api.get(`/enrollments/${courseId}/certificate/download`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([response.data], { type: 'image/png' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Edugraph_Certificate_${(courseTitle || 'Course').replace(/\s+/g, '_')}.png`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      alert('Certificate is only available for fully completed courses (100%).');
+    }
   };
 
   const getCourseTitle = (enrollment: any) => 
@@ -114,6 +172,9 @@ export default function StudentDashboard() {
             <a href="/student/progress" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
               <TrendingUp size={16} /> Progress
             </a>
+            <a href="/student/badges" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+              <Award size={16} /> Badges & Certificates
+            </a>
             <a href="/student/profile" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
               <User size={16} /> Profile & Settings
             </a>
@@ -125,7 +186,7 @@ export default function StudentDashboard() {
 
         <button 
           onClick={handleLogout}
-          className="flex items-center gap-2 text-xs font-bold text-rose-600 hover:text-rose-700 transition px-3 py-2 rounded-xl hover:bg-rose-50 w-fit"
+          className="flex items-center gap-2 text-xs font-bold text-rose-600 hover:text-rose-700 transition px-3 py-2 rounded-xl hover:bg-rose-50 w-fit cursor-pointer"
         >
           <LogOut size={15} /> Logout
         </button>
@@ -142,7 +203,7 @@ export default function StudentDashboard() {
           </div>
           
           <div className="flex items-center gap-4">
-            <button className="w-10 h-10 rounded-full bg-[#f4f7f4] border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:bg-[#d3efdc]/30 transition">
+            <button className="w-10 h-10 rounded-full bg-[#f4f7f4] border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:bg-[#d3efdc]/30 transition cursor-pointer">
               <Bell size={16} />
             </button>
             <div className="flex items-center gap-3 pl-3 border-l border-[#e2eae4]">
@@ -156,7 +217,7 @@ export default function StudentDashboard() {
               <button 
                 onClick={handleLogout}
                 title="Logout"
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition text-xs font-bold border border-rose-100"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition text-xs font-bold border border-rose-100 cursor-pointer"
               >
                 <LogOut size={14} />
                 <span>Logout</span>
@@ -224,7 +285,64 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          {/* SECTION 2: My Courses & Search */}
+          {/* SECTION 2: Earned Badges & Achievements (Interactive Click for Preview & Download) */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-[#112217]">My Earned Course Badges</h3>
+                <p className="text-[11px] text-[#4a6b5d]">Click any badge to view details, verify credentials, or download.</p>
+              </div>
+              <button 
+                onClick={() => router.push('/student/badges')}
+                className="text-xs font-bold text-[#2e5a44] hover:text-[#112217] transition flex items-center gap-1 cursor-pointer bg-[#d3efdc]/50 px-3.5 py-1.5 rounded-xl border border-[#bce8c9]"
+              >
+                View Badges Page <ArrowRight size={13} />
+              </button>
+            </div>
+
+            {badgesLoading ? (
+              <div className="p-8 text-center text-xs text-[#4a6b5d] bg-white border border-[#e2eae4] rounded-[24px]">
+                <Loader2 className="animate-spin text-[#2e5a44] mx-auto mb-2" size={20} />
+                Loading earned badges...
+              </div>
+            ) : badges.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#4a6b5d] bg-white border border-[#e2eae4] rounded-[24px] space-y-1">
+                <Award className="mx-auto text-[#2e5a44] mb-1" size={22} />
+                <p className="font-bold text-[#112217]">No badges earned yet</p>
+                <p>Complete course milestones and master all nodes to unlock verified credentials!</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+                {badges.map((badge) => (
+                  <div 
+                    key={badge.id} 
+                    onClick={() => setSelectedBadge(badge)}
+                    className="bg-white border border-[#e2eae4] rounded-[24px] p-6 shadow-sm flex items-center gap-4 hover:shadow-md hover:border-[#2e5a44] transition cursor-pointer group"
+                  >
+                    <div className="w-14 h-14 rounded-2xl bg-[#d3efdc]/50 border border-[#bce8c9] flex items-center justify-center shrink-0 p-2">
+                      <img 
+                        src={badge.badge_image_url || '/default-badge.png'} 
+                        alt={badge.badge_title} 
+                        className="w-full h-full object-contain"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1 overflow-hidden">
+                      <h4 className="text-xs font-black text-[#112217] truncate group-hover:text-[#2e5a44] transition">{badge.badge_title}</h4>
+                      <p className="text-[10px] text-[#4a6b5d]">Issued: {new Date(badge.issued_at).toLocaleDateString()}</p>
+                      <span className="inline-block text-[9px] font-extrabold px-2 py-0.5 bg-[#d3efdc]/60 text-[#2e5a44] rounded-full">
+                        Click to View 🔍
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 3: My Courses & Search */}
           <div className="space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
@@ -257,7 +375,7 @@ export default function StudentDashboard() {
                       <div className="space-y-3">
                         <div className="flex items-start justify-between">
                           <p className="text-xs font-bold text-[#112217] leading-snug">{getCourseTitle(enrollment)}</p>
-                          <button className="text-slate-400 hover:text-slate-600">
+                          <button className="text-slate-400 hover:text-slate-600 cursor-pointer">
                             <MoreVertical size={16} />
                           </button>
                         </div>
@@ -286,7 +404,7 @@ export default function StudentDashboard() {
               <div className="bg-[#fbfcfb] border border-[#e2eae4] rounded-[24px] p-6 shadow-sm flex flex-col items-center justify-between text-center space-y-4">
                 <div className="w-full flex justify-between items-center">
                   <span className="text-[11px] font-bold text-[#4a6b5d]">Live Graph Preview</span>
-                  <button onClick={() => router.push('/student/progress')} className="text-[10px] font-extrabold text-[#2e5a44] hover:underline">View Details</button>
+                  <button onClick={() => router.push('/student/progress')} className="text-[10px] font-extrabold text-[#2e5a44] hover:underline cursor-pointer">View Details</button>
                 </div>
 
                 <div className="w-full h-32 bg-white rounded-2xl border border-dashed border-[#e2eae4] flex items-center justify-center relative overflow-hidden shadow-inner">
@@ -320,6 +438,69 @@ export default function StudentDashboard() {
 
         </div>
       </main>
+
+      {/* Badge Detail & Download Modal */}
+      {selectedBadge && (
+        <div className="fixed inset-0 z-50 bg-[#112217]/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-[#e2eae4] rounded-[32px] shadow-2xl w-full max-w-md p-8 space-y-6 relative animate-in fade-in zoom-in duration-200">
+            <button 
+              onClick={() => setSelectedBadge(null)}
+              className="absolute top-6 right-6 text-slate-400 hover:text-[#112217] p-1.5 rounded-xl transition cursor-pointer bg-[#f4f7f4]"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="text-center space-y-4 pt-2">
+              <div className="w-28 h-28 mx-auto rounded-3xl bg-[#d3efdc]/40 border border-[#bce8c9] flex items-center justify-center p-4 shadow-inner">
+                <img 
+                  src={selectedBadge.badge_image_url || '/default-badge.png'} 
+                  alt={selectedBadge.badge_title} 
+                  className="w-full h-full object-contain"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44] bg-[#d3efdc]/60 px-3 py-1 rounded-full">
+                  Verified Certificate Credential
+                </span>
+                <h3 className="text-base font-black text-[#112217]">{selectedBadge.badge_title}</h3>
+                <p className="text-xs text-[#4a6b5d]">
+                  Officially issued on {new Date(selectedBadge.issued_at).toLocaleDateString()} for mastering all knowledge graph milestones.
+                </p>
+              </div>
+            </div>
+
+            {selectedBadge.course_id && (
+              <button 
+                onClick={() => handleDownloadCertificate(selectedBadge.course_id, selectedBadge.course_title || selectedBadge.badge_title)}
+                className="w-full py-3 bg-[#2e5a44] hover:bg-[#223d2f] text-white rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+              >
+                <Download size={14} /> Download Verified Certificate (.png)
+              </button>
+            )}
+
+            {/*<div className="flex items-center gap-3 pt-1">
+              <a 
+                href={selectedBadge.badge_image_url || '#'} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex-1 py-3 bg-[#f4f7f4] hover:bg-[#e2eae4] text-[#112217] rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer border border-[#e2eae4]"
+              >
+                <ExternalLink size={14} /> Open Full Size
+              </a>
+
+              <a 
+                href={selectedBadge.badge_image_url || '#'} 
+                download={`${selectedBadge.badge_title.replace(/\s+/g, '_')}_Badge.png`}
+                className="flex-1 py-3 bg-[#112217] hover:bg-[#223d2f] text-white rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+              >
+                <Download size={14} /> Download Badge
+              </a>
+            </div>*/}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
