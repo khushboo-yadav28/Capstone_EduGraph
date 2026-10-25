@@ -23,7 +23,8 @@ import {
   GitBranch,
   Layers,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  BarChart3
 } from 'lucide-react';
 import { 
   api, 
@@ -451,7 +452,16 @@ export default function InstructorDashboard() {
                           <span>Graph Editor</span>
                         </button>
 
-                        {/* Publish Course Button (PUT /courses/{id}/publish) */}
+                        {/* Analytics Button */}
+                        <button
+                          onClick={() => router.push(`/instructor/course/${course.id}/analytics`)}
+                          className="px-3.5 py-2 bg-[#f4f7f4] hover:bg-[#d3efdc]/50 text-[#2e5a44] border border-[#e2eae4] text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                          title="View Student Retention & Difficulty Heatmap"
+                        >
+                          <BarChart3 size={14} /> Analytics
+                        </button>
+
+                        {/* Publish Course Button */}
                         <button 
                           onClick={() => {
                             if ((course as any).nodes_count === 0) {
@@ -516,7 +526,7 @@ export default function InstructorDashboard() {
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
                         <button 
                           onClick={() => router.push(`/instructor/course/${course.id}`)}
                           className="px-3.5 py-2 bg-[#112217] text-white rounded-xl text-xs font-bold hover:bg-[#223d2f] transition flex items-center gap-1.5 cursor-pointer shadow-sm"
@@ -524,6 +534,15 @@ export default function InstructorDashboard() {
                           <GitBranch size={13} />
                           <span>View Graph</span>
                         </button>
+
+                        <button
+                          onClick={() => router.push(`/instructor/course/${course.id}/analytics`)}
+                          className="px-3.5 py-2 bg-[#f4f7f4] hover:bg-[#d3efdc]/50 text-[#2e5a44] border border-[#e2eae4] text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                          title="View Student Retention & Difficulty Heatmap"
+                        >
+                          <BarChart3 size={14} /> Analytics
+                        </button>
+
                         <button 
                           onClick={() => router.push(`/student/course/${course.id}`)}
                           className="px-3 py-2 bg-white border border-[#e2eae4] text-[#112217] rounded-xl text-xs font-bold hover:bg-[#f4f7f4] transition cursor-pointer"

@@ -95,7 +95,6 @@ async def ingest_pdf_to_course(
     records CourseDocument records, chunks & generates embeddings for RAG,
     and extracts knowledge graph nodes, edges, & quizzes into PostgreSQL.
     """
-    # Verify course existence and permissions
     course = course_service.get_course_by_id(db, course_id)
     if course.instructor_id != current_user.id and current_user.role != UserRole.ADMIN:
         raise HTTPException(
@@ -103,7 +102,6 @@ async def ingest_pdf_to_course(
             detail="You do not have permission to modify this course."
         )
 
-    # Collect uploaded files (supporting both multi-file 'files' and legacy 'file')
     upload_list: List[UploadFile] = []
     if files:
         upload_list.extend(files)
@@ -116,7 +114,6 @@ async def ingest_pdf_to_course(
             detail="At least one PDF file must be provided."
         )
 
-    # Prepare storage directory for course materials
     course_upload_dir = settings.UPLOAD_DIR / str(course_id)
     course_upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +121,6 @@ async def ingest_pdf_to_course(
 
     for upload_file in upload_list:
         clean_filename = Path(upload_file.filename).name
-        # Sanitize filename
         safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', clean_filename)
         if not safe_filename.lower().endswith(".pdf"):
             safe_filename += ".pdf"
@@ -137,7 +133,6 @@ async def ingest_pdf_to_course(
         with open(target_path, "wb") as f_out:
             f_out.write(pdf_bytes)
 
-        # 1. Record CourseDocument in DB
         course_doc = course_service.save_course_document(
             db=db,
             course_id=course_id,
@@ -147,7 +142,6 @@ async def ingest_pdf_to_course(
             mime_type="application/pdf"
         )
 
-        # 2. Extract text chunks & compute embeddings for RAG
         chunks = extract_text_chunks_from_pdf(pdf_bytes, document_name=clean_filename, chunk_size=1000, chunk_overlap=150)
         if chunks:
             embedded_chunks = generate_embeddings_for_chunks(chunks)
@@ -166,7 +160,6 @@ async def ingest_pdf_to_course(
             detail="None of the uploaded files contained valid PDF data."
         )
 
-    # 3. Antigravity Pipeline: Extract knowledge graph and quizzes from all uploaded PDFs
     try:
         graph_data = extract_course_graph_from_multiple_pdfs(pdf_payloads)
     except Exception as e:
@@ -175,7 +168,6 @@ async def ingest_pdf_to_course(
             detail=f"Knowledge graph extraction error: {str(e)}"
         )
 
-    # 4. Save generated graph to course
     updated_course = course_service.save_generated_graph_to_course(
         db=db,
         course_id=course_id,
@@ -193,10 +185,7 @@ def list_course_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Returns the list of uploaded PDF course documents for enrolled students,
-    instructors, or administrators. Validates enrollment/access authorization.
-    """
+    """Returns the list of uploaded PDF course documents."""
     course_service.validate_user_course_access(db, course_id, current_user)
     documents = course_service.get_course_documents(db, course_id)
 
@@ -228,10 +217,7 @@ def download_course_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Securely streams a course PDF document for student viewing or downloading.
-    Validates user enrollment or instructional permissions before serving file.
-    """
+    """Securely streams a course PDF document."""
     course_service.validate_user_course_access(db, course_id, current_user)
 
     doc = course_service.get_course_document_by_id(db, course_id, document_id)
@@ -261,27 +247,20 @@ def get_node_rag_context_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Retrieves RAG reference chunks and excerpts for a learning node.
-    Used for student doubt resolution and contextual reference in the learning workspace.
-    """
+    """Retrieves RAG reference chunks and excerpts for a learning node."""
     context_data = course_service.get_node_rag_context(db, node_id, current_user)
     return RAGContextResponse(**context_data)
 
 
 @router.get("/published", response_model=List[CourseDetailResponse])
 def list_published_courses(
-    q: Optional[str] = Query(None, description="Search keyword for course name, description, instructor, or category"),
-    category: Optional[str] = Query(None, description="Filter specifically by category name (e.g. 'Computer Science')"),
+    q: Optional[str] = Query(None, description="Search keyword"),
+    category: Optional[str] = Query(None, description="Filter category"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    """
-    Public Endpoint for Course Browsing & Searching.
-    Order results by popularity (enrolled students) and recency.
-    Guest user can search by typing in `q` or selecting a category name in `category`.
-    """
+    """Public Endpoint for Course Browsing & Searching."""
     return course_service.get_published_courses_with_search(
         db=db,
         search=q,
@@ -296,11 +275,7 @@ def get_public_course_details(
     course_id: UUID,
     db: Session = Depends(get_db)
 ):
-    """
-    Public Course Landing Page Endpoint.
-    When a guest/user clicks a course card, this provides all course meta details
-    (Instructor name, Description, Category, Total enrolled students, Total learning graph topics count).
-    """
+    """Public Course Landing Page Endpoint."""
     return course_service.get_single_course_public_details(db, course_id)
 
 
@@ -309,7 +284,7 @@ def get_course_details(
     course_id: UUID,
     db: Session = Depends(get_db)
 ):
-    """Retrieves full course structure including Graph Nodes and Edges (Public)."""
+    """Retrieves full course structure."""
     return course_service.get_course_by_id(db, course_id)
 
 
@@ -319,7 +294,7 @@ def publish_course_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
-    """Publishes a course draft (Owner Instructor only)."""
+    """Publishes a course draft."""
     return course_service.publish_course(db, course_id, current_user)
 
 
@@ -329,7 +304,7 @@ def delete_course_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
-    """Deletes a course (Owner Instructor or Admin only)."""
+    """Deletes a course."""
     course_service.delete_course(db, course_id, current_user)
 
 
@@ -339,13 +314,7 @@ def get_course_graph(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Fetches the entire course graph (Nodes + Edges) with student-specific status:
-    - COMPLETED: Passed quiz (>= 70%)
-    - UNLOCKED: Root node OR all prerequisite parent nodes are completed by this student
-    - LOCKED: Missing completion on one or more prerequisite parent nodes
-    """
-    # 1. Fetch Course
+    """Fetches the entire course graph with student-specific status."""
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
@@ -353,22 +322,18 @@ def get_course_graph(
             detail="Course not found."
         )
 
-    # 2. Fetch Nodes & Edges
     nodes = db.query(Node).filter(Node.course_id == course_id).all()
     edges = db.query(Edge).filter(Edge.course_id == course_id).all()
 
     node_ids = [n.id for n in nodes]
 
-    # 3. Fetch current student's progress records for this course
     progress_records = db.query(StudentProgress).filter(
         StudentProgress.student_id == current_user.id,
         StudentProgress.node_id.in_(node_ids)
     ).all()
     
-    # Quick lookup map: node_id -> StudentProgress record
     progress_map: Dict[UUID, StudentProgress] = {p.node_id: p for p in progress_records}
 
-    # 4. Fetch highest quiz attempt score per node for current student
     best_scores_query = (
         db.query(
             QuizAttempt.node_id,
@@ -383,27 +348,22 @@ def get_course_graph(
     )
     score_map: Dict[UUID, float] = {row.node_id: row.max_score for row in best_scores_query}
 
-    # 5. Build lookup maps for Prerequisites
-    # target_node_key -> list of source_node_keys
     prereqs_map: Dict[str, List[str]] = {n.node_key: [] for n in nodes}
     for e in edges:
         if e.target_node_key in prereqs_map:
             prereqs_map[e.target_node_key].append(e.source_node_key)
 
-    # Set of completed node_keys by this student
     completed_node_keys: Set[str] = {
         n.node_key for n in nodes
         if progress_map.get(n.id) and progress_map[n.id].is_completed
     }
 
-    # 6. Build response node list with evaluated statuses
     formatted_nodes: List[GraphNodeResponse] = []
     
     for n in nodes:
         prog = progress_map.get(n.id)
         prereqs = prereqs_map.get(n.node_key, [])
         
-        # Check if all upstream prerequisites are completed
         all_prereqs_completed = all(p_key in completed_node_keys for p_key in prereqs)
 
         if prog and prog.is_completed:
@@ -452,7 +412,6 @@ def get_instructor_course_graph(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Verify user role and course ownership
     if current_user.role != UserRole.INSTRUCTOR and current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -516,10 +475,6 @@ def list_instructor_drafts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.INSTRUCTOR]))
 ):
-    """
-    Retrieves all draft courses created by the authenticated instructor.
-    Used for the instructor dashboard where they can review drafts and click 'Publish'.
-    """
     return course_service.get_instructor_draft_courses(db=db, current_user=current_user)
 
 
@@ -530,10 +485,6 @@ def update_instructor_course_graph_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([UserRole.INSTRUCTOR, UserRole.ADMIN]))
 ):
-    """
-    Saves changes made by an instructor on the React Flow canvas 
-    (Node positions, titles, summaries, and edge connections) before publishing.
-    """
     updated_course = course_service.update_instructor_course_graph(
         db=db,
         course_id=course_id,
@@ -550,8 +501,11 @@ def get_instructor_course_analytics(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Returns heatmap analytics for an instructor showing student node clearance 
-    counts and percentages across all nodes in a course.
+    Returns heatmap analytics for an instructor including:
+    - Total enrolled vs active students (filtering out dropped/inactive students)
+    - Node clearance counts & percentages
+    - Difficult node detection: flagged RED if >= 40% of active students 
+      have more than 6 total quiz attempts (Quiz Set 1 + Set 2) on that node.
     """
     if current_user.role not in [UserRole.INSTRUCTOR, UserRole.ADMIN]:
         raise HTTPException(
@@ -566,36 +520,77 @@ def get_instructor_course_analytics(
             detail="Course not found."
         )
 
-    # Total Enrolled Students Count for this Course
-    total_enrolled_students = db.query(func.count(UserCourseEnrollment.id)).filter(
+    # 1. Total Enrolled Students Count
+    enrollments = db.query(UserCourseEnrollment).filter(
         UserCourseEnrollment.course_id == course_id
-    ).scalar() or 0
+    ).all()
+    
+    total_enrolled_students = len(enrollments)
+
+    # 2. Active Students Filter (Excluding DROPPED students as per Mam's requirement)
+    active_enrollments = [e for e in enrollments if e.status != 'DROPPED']
+    active_student_ids = [e.student_id for e in active_enrollments]
+    total_active_students = len(active_student_ids)
 
     # Fetch all nodes for this course
     nodes = db.query(Node).filter(Node.course_id == course_id).all()
     node_analytics = []
 
     for node in nodes:
+        # Clearance count among active students
         cleared_students_count = db.query(func.count(StudentProgress.id)).filter(
             StudentProgress.node_id == node.id,
+            StudentProgress.student_id.in_(active_student_ids) if active_student_ids else False,
             StudentProgress.is_completed == True
         ).scalar() or 0
 
         clearance_percentage = (
-            round((cleared_students_count / total_enrolled_students) * 100.0, 2)
-            if total_enrolled_students > 0
+            round((cleared_students_count / total_active_students) * 100.0, 2)
+            if total_active_students > 0
             else 0.0
         )
 
-        heatmap_status = "GREEN" if clearance_percentage >= 60.0 else "RED"
+        # 3. Difficult Node Check (>= 40% active students with total attempts > 6)
+        struggling_students_count = 0
+        if active_student_ids:
+            # Query students who have > 6 total quiz attempts on this node
+            attempt_counts_query = (
+                db.query(
+                    QuizAttempt.student_id,
+                    func.count(QuizAttempt.id).label("total_attempts")
+                )
+                .filter(
+                    QuizAttempt.node_id == node.id,
+                    QuizAttempt.student_id.in_(active_student_ids)
+                )
+                .group_by(QuizAttempt.student_id)
+                .all()
+            )
+            
+            # Count students with > 6 attempts
+            struggling_students_count = sum(1 for row in attempt_counts_query if row.total_attempts > 6)
+
+        struggling_percentage = (
+            round((struggling_students_count / total_active_students) * 100.0, 2)
+            if total_active_students > 0
+            else 0.0
+        )
+
+        # Flag as RED if >= 40% active students are struggling, else GREEN based on clearance
+        is_difficult = struggling_percentage >= 40.0
+        heatmap_status = "RED" if is_difficult or clearance_percentage < 60.0 else "GREEN"
 
         node_analytics.append({
             "node_id": str(node.id),
             "node_key": node.node_key,
             "title": node.title,
             "total_enrolled": total_enrolled_students,
+            "total_active": total_active_students,
             "cleared_students_count": cleared_students_count,
             "clearance_percentage": clearance_percentage,
+            "struggling_students_count": struggling_students_count,
+            "struggling_percentage": struggling_percentage,
+            "is_difficult_node": is_difficult,
             "heatmap_status": heatmap_status
         })
 
@@ -603,5 +598,6 @@ def get_instructor_course_analytics(
         "course_id": str(course.id),
         "course_title": course.title,
         "total_enrolled_students": total_enrolled_students,
+        "total_active_students": total_active_students,
         "nodes_analytics": node_analytics
     }

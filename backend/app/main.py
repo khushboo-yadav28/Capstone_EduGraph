@@ -17,7 +17,30 @@ async def lifespan(app: FastAPI):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
             conn.execute(text("ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
-        logging.info("Database schema synchronized successfully (quiz_attempts.set_number confirmed).")
+            
+            # Ensure student_profiles has program and semester columns
+            conn.execute(text("ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS program VARCHAR(100);"))
+            conn.execute(text("ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS semester VARCHAR(50);"))
+            
+            # Backfill profile extension rows for any existing users
+            conn.execute(text("""
+                INSERT INTO student_profiles (id, user_id, created_at, updated_at)
+                SELECT gen_random_uuid(), id, now(), now()
+                FROM users
+                WHERE role = 'STUDENT'
+                  AND id NOT IN (SELECT user_id FROM student_profiles)
+                ON CONFLICT (user_id) DO NOTHING;
+            """))
+            conn.execute(text("""
+                INSERT INTO instructor_profiles (id, user_id, created_at, updated_at)
+                SELECT gen_random_uuid(), id, now(), now()
+                FROM users
+                WHERE role = 'INSTRUCTOR'
+                  AND id NOT IN (SELECT user_id FROM instructor_profiles)
+                ON CONFLICT (user_id) DO NOTHING;
+            """))
+
+        logging.info("Database schema synchronized successfully (models, tables, and profile extensions confirmed).")
     except Exception as e:
         logging.warning(f"Database schema auto-sync warning: {e}")
     yield

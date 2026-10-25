@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, StudentProfile, InstructorProfile
 from app.models.course import Category
-from app.core.security import hash_password,verify_password
+from app.core.security import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,24 @@ DEFAULT_USERS = [
         "email": "instructor@gmail.com",
         "password": "instructor123",
         "role": UserRole.INSTRUCTOR,
+        "department": "Department of Computer Science",
+        "expertise": "Knowledge Graphs, RAG Systems, AI Curriculum",
+        "qualifications": "Ph.D. in Computer Science",
+        "designation": "Lead AI Curriculum Specialist",
+        "bio": "Senior professor with research focus in adaptive learning algorithms.",
+        "office_hours": "Mon/Wed 2:00 PM - 4:00 PM"
     },
     {
         "full_name": "Alex Mercer",
         "email": "student@gmail.com",
         "password": "student123",
         "role": UserRole.STUDENT,
+        "department": "Computer Science & Engineering",
+        "batch": "2024-2028",
+        "enrollment_number": "STU-2026-001",
+        "academic_year": "3rd Year",
+        "bio": "Undergraduate student exploring knowledge graphs and adaptive courseware.",
+        "interests": "Machine Learning, Graph Neural Networks, RAG"
     },
 ]
 
@@ -57,11 +69,11 @@ def seed_categories(db: Session) -> list[Category]:
 
 
 def seed_users(db: Session) -> list[User]:
-    """Seeds default Admin, Instructor, and Student accounts."""
+    """Seeds default Admin, Instructor, and Student accounts with profile extensions."""
     created_users = []
     for user_data in DEFAULT_USERS:
-        existing = db.query(User).filter(User.email == user_data["email"]).first()
-        if not existing:
+        user = db.query(User).filter(User.email == user_data["email"]).first()
+        if not user:
             hashed_pw = hash_password(user_data["password"])
             user = User(
                 full_name=user_data["full_name"],
@@ -71,10 +83,35 @@ def seed_users(db: Session) -> list[User]:
                 is_active=True
             )
             db.add(user)
+            db.flush()
             created_users.append(user)
             logger.info(f"Seeded User ({user_data['role']}): {user_data['email']}")
         else:
-            created_users.append(existing)
+            created_users.append(user)
+
+        # Seed profile extensions
+        if user.role == UserRole.STUDENT and not user.student_profile:
+            prof = StudentProfile(
+                user_id=user.id,
+                department=user_data.get("department", "Computer Science & Engineering"),
+                batch=user_data.get("batch", "2024-2028"),
+                enrollment_number=user_data.get("enrollment_number", "STU-2026-001"),
+                academic_year=user_data.get("academic_year", "3rd Year"),
+                bio=user_data.get("bio", "Student profile bio."),
+                interests=user_data.get("interests", "Knowledge Graphs, AI")
+            )
+            db.add(prof)
+        elif user.role == UserRole.INSTRUCTOR and not user.instructor_profile:
+            prof = InstructorProfile(
+                user_id=user.id,
+                department=user_data.get("department", "Department of Computer Science"),
+                expertise=user_data.get("expertise", "Knowledge Graphs, AI"),
+                qualifications=user_data.get("qualifications", "Ph.D. in Computer Science"),
+                designation=user_data.get("designation", "Faculty Instructor"),
+                bio=user_data.get("bio", "Instructor bio."),
+                office_hours=user_data.get("office_hours", "Mon/Wed 2:00 PM - 4:00 PM")
+            )
+            db.add(prof)
 
     db.commit()
     return created_users
@@ -95,12 +132,9 @@ def seed_all_initial_data(db: Session) -> dict:
     }
 
 if __name__ == "__main__":
-    import logging
     from app.database import SessionLocal
 
-    # Ensure log output is visible in console
     logging.basicConfig(level=logging.INFO)
-
     db = SessionLocal()
     try:
         results = seed_all_initial_data(db)

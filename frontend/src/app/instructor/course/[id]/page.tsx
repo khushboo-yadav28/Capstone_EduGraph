@@ -263,7 +263,6 @@ export default function InstructorCourseDetailPage() {
     setStatusMessage(null);
 
     try {
-      // Map edges back to source_node_key and target_node_key
       const nodeIdToKeyMap = new Map<string, string>();
       nodes.forEach((n) => {
         const raw = n.data?.rawNodeData as RawNodeData;
@@ -413,7 +412,6 @@ export default function InstructorCourseDetailPage() {
               </span>
             )}
 
-            {/* Save Layout Button (PUT /courses/instructor/{course_id}/graph) */}
             <button 
               onClick={handleSaveGraphLayout}
               disabled={saving}
@@ -423,7 +421,6 @@ export default function InstructorCourseDetailPage() {
               <span>{saving ? 'Saving...' : 'Save Graph Layout'}</span>
             </button>
 
-            {/* Publish Course Button (PUT /courses/{course_id}/publish) */}
             <button 
               onClick={handlePublishCourse}
               disabled={publishing}

@@ -36,6 +36,7 @@ interface Badge {
 
 export default function StudentDashboard() {
   const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
   const [enrollments, setEnrollments] = useState<any[]>([]);
   const [badges, setBadges] = useState<Badge[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -47,63 +48,72 @@ export default function StudentDashboard() {
   const [selectedBadge, setSelectedBadge] = useState<Badge | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
+
+    // 1. Strict Authentication & Token Guard
+    const rawToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const token = rawToken && rawToken !== 'undefined' && rawToken !== 'null' && rawToken.trim() !== '' ? rawToken.trim() : null;
+
+    if (!token) {
+      console.warn('StudentDashboard: Missing or invalid auth token. Redirecting immediately to /login...');
+      setLoading(true);
+      setAuthChecked(false);
+      router.replace('/login');
+      return;
+    }
+
+    setAuthChecked(true);
+
     async function fetchDashboardData() {
       try {
         setLoading(true);
         // Fetch enrollments
         try {
           const response = await api.get('/enrollments/me');
-          if (response.data && response.data.length > 0) {
-            setEnrollments(response.data);
-            calculateAverageProgress(response.data);
-          } else {
-            throw new Error('No live enrollments returned');
-          }
-        } catch (err) {
-          // Fallback mock structure
-          const mockEnrollments = [
-            {
-              id: 1,
-              course_id: '5208c480-174a-4767-981e-35d8d38cb5ca',
-              progress_percentage: 45,
-              course: { title: 'Advanced Data Science and Programming Essentials with Python' },
-              category: 'AI & Data Science'
-            },
-            {
-              id: 2,
-              course_id: '4598b62a-000e-40b6-951c-1a377c667e56',
-              progress_percentage: 75,
-              course: { title: 'Data Warehousing and Data Mining - Fundamentals' },
-              category: 'Data Engineering'
-            },
-            {
-              id: 3,
-              course_id: '38ef3435-a4c8-485e-9199-13556f896be0',
-              progress_percentage: 90,
-              course: { title: 'Introduction to Blockchain Technology' },
-              category: 'Blockchain'
+          if (isMounted) {
+            if (response.data && response.data.length > 0) {
+              setEnrollments(response.data);
+              calculateAverageProgress(response.data);
+            } else {
+              setEnrollments([]);
+              setOverallProgress(0);
             }
-          ];
-          setEnrollments(mockEnrollments);
-          calculateAverageProgress(mockEnrollments);
+          }
+        } catch (err: any) {
+          console.warn('Could not fetch enrollments:', err?.response?.data || err?.message);
+          if (isMounted) {
+            setEnrollments([]);
+            setOverallProgress(0);
+          }
         }
 
         // Fetch earned badges (GET /enrollments/badges/me)
         try {
           const badgeRes = await api.get('/enrollments/badges/me');
-          setBadges(badgeRes.data || []);
-        } catch (badgeErr) {
-          console.warn('Failed to fetch badges, falling back to empty state:', badgeErr);
-          setBadges([]);
+          if (isMounted) {
+            setBadges(badgeRes.data || []);
+          }
+        } catch (badgeErr: any) {
+          console.warn('Failed to fetch badges:', badgeErr?.response?.data || badgeErr?.message);
+          if (isMounted) {
+            setBadges([]);
+          }
         }
 
       } finally {
-        setLoading(false);
-        setBadgesLoading(false);
+        if (isMounted) {
+          setLoading(false);
+          setBadgesLoading(false);
+        }
       }
     }
+
     fetchDashboardData();
-  }, []);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
 
   const calculateAverageProgress = (data: any[]) => {
     if (!data.length) return;
@@ -148,6 +158,21 @@ export default function StudentDashboard() {
   const filteredCourses = enrollments.filter(c => 
     getCourseTitle(c).toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Guard display: Render loading screen until session verification and initial fetches settle
+  if (!authChecked || loading) {
+    return (
+      <div className="h-screen w-full bg-[#f4f7f4] flex flex-col items-center justify-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md animate-pulse">
+          <Network size={24} />
+        </div>
+        <div className="flex items-center gap-2 text-xs font-bold text-[#2e5a44]">
+          <Loader2 size={16} className="animate-spin" />
+          <span>Verifying session & loading student dashboard...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-full bg-[#f4f7f4] text-[#1e2923] overflow-hidden selection:bg-[#2e5a44] selection:text-white">

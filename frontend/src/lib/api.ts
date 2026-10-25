@@ -1,5 +1,8 @@
 import axios from 'axios';
 
+// Flag to prevent multiple simultaneous 401 redirect cascades
+let isRedirecting = false;
+
 // ---------------------------------------------------------------------------
 // Axios Instance Configuration
 // ---------------------------------------------------------------------------
@@ -11,10 +14,15 @@ export const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('token');
-      console.log("Attached Auth Token:", token ? token.slice(0, 15) + '...' : 'NONE FOUND');
+      const rawToken = localStorage.getItem('token');
+      const token = rawToken && rawToken !== 'undefined' && rawToken !== 'null' ? rawToken.trim() : null;
       if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+        if (config.headers) {
+          config.headers.Authorization = `Bearer ${token}`;
+          if (typeof config.headers.set === 'function') {
+            config.headers.set('Authorization', `Bearer ${token}`);
+          }
+        }
       }
     }
     return config;
@@ -22,14 +30,34 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor for Unauthorized Redirects
+// Response Interceptor for Unauthorized Redirects & Error Handling
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-      localStorage.removeItem('userRole');
-      window.location.href = '/login';
+    if (typeof window !== 'undefined') {
+      const requestUrl = error.config?.url || '';
+      const isAuthEndpoint = 
+        requestUrl.includes('/auth/login') || 
+        requestUrl.includes('/auth/register');
+
+      // Only handle 401 on protected resources (not on /auth/login or /auth/register)
+      if (error.response?.status === 401 && !isAuthEndpoint) {
+        const currentPath = window.location.pathname;
+
+        // Clear invalid or expired credentials
+        localStorage.removeItem('token');
+        localStorage.removeItem('userRole');
+
+        // Only redirect if not already redirecting and not already on auth pages
+        if (!isRedirecting && currentPath !== '/login' && currentPath !== '/register') {
+          isRedirecting = true;
+          console.warn('Session expired or token invalid. Redirecting to login...');
+          window.location.replace('/login');
+          setTimeout(() => {
+            isRedirecting = false;
+          }, 1500);
+        }
+      }
     }
     return Promise.reject(error);
   }

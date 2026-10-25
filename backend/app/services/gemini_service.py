@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional, Union
 from uuid import uuid4
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 
 from app.core.config import (
@@ -32,37 +33,81 @@ _DISCOVERED_EMBED_MODELS: Optional[List[str]] = None
 
 
 def get_candidate_generation_models() -> List[str]:
-    """Dynamically retrieves and prioritizes active Gemini generation models."""
+    """Discover and prioritize available Gemini generation models."""
     global _DISCOVERED_GEN_MODELS
-    if _DISCOVERED_GEN_MODELS is None and client:
-        try:
-            available: List[str] = []
-            for m in client.models.list():
-                raw_name = getattr(m, "name", "") or ""
-                clean_name = raw_name.replace("models/", "").strip()
-                methods = getattr(m, "supported_generation_methods", None) or getattr(m, "supported_actions", None) or []
-                methods_str = " ".join([str(x) for x in methods])
-                if "generateContent" in methods_str or "generate_content" in methods_str or not methods:
-                    available.append(clean_name)
-            logger.info(f"Dynamically discovered {len(available)} available Gemini generation models: {available[:10]}")
-            _DISCOVERED_GEN_MODELS = available
-        except Exception as e:
-            logger.warning(f"Could not dynamically list Gemini models: {e}")
-            _DISCOVERED_GEN_MODELS = []
 
-    # Priority order: Configured models -> gemini-3.8-flash (Google recommended) -> discovered models
-    defaults = [
+    if _DISCOVERED_GEN_MODELS is None:
+        _DISCOVERED_GEN_MODELS = []
+
+        if client:
+            try:
+                available = []
+
+                for model in client.models.list():
+                    raw_name = getattr(model, "name", "") or ""
+                    name = raw_name.replace("models/", "").strip()
+
+                    methods = (
+                        getattr(model, "supported_generation_methods", None)
+                        or getattr(model, "supported_actions", None)
+                        or []
+                    )
+
+                    methods = {
+                        str(method).lower() for method in methods
+                    }
+
+                    if name and (
+                        "generatecontent" in methods
+                        or "generate_content" in methods
+                    ):
+                        available.append(name)
+
+                _DISCOVERED_GEN_MODELS = available
+
+                logger.info(
+                    "Discovered %d supported generation models",
+                    len(available),
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Gemini model discovery failed: %s",
+                    exc,
+                )
+
+    preferred_models = [
         GEMINI_PRIMARY_MODEL,
-        "gemini-3.8-flash",
         GEMINI_FALLBACK_MODEL,
-        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
         "gemini-flash-latest",
+        "gemini-2.5-pro",
     ]
-    candidates: List[str] = []
-    for model in defaults + (_DISCOVERED_GEN_MODELS or []):
-        if model and model not in candidates:
-            candidates.append(model)
-    return candidates
+
+    discovered_models = _DISCOVERED_GEN_MODELS or []
+
+    if discovered_models:
+        available_set = set(discovered_models)
+
+        candidates = [
+            model
+            for model in preferred_models
+            if model and model in available_set
+        ]
+
+        # Append other discovered models as additional fallbacks.
+        for model in discovered_models:
+            if model not in candidates:
+                candidates.append(model)
+
+        return candidates
+
+    # Discovery failed: use configured defaults as best-effort fallbacks.
+    return list(
+        dict.fromkeys(
+            model for model in preferred_models if model
+        )
+    )
 
 
 def get_candidate_embedding_models() -> List[str]:
@@ -98,7 +143,6 @@ def get_candidate_embedding_models() -> List[str]:
 
 # ==========================================
 # 2. Structured Output Pydantic Schemas
-# (Strictly matched to DB models and Schemas)
 # ==========================================
 
 class GeminiQuizSchema(BaseModel):
@@ -181,10 +225,6 @@ def extract_text_chunks_from_pdf(
     chunk_size: int = 800, 
     chunk_overlap: int = 150
 ) -> List[Dict[str, Any]]:
-    """
-    Extracts text per page from PDF bytes using PyMuPDF and creates chunk records
-    with page references for RAG context.
-    """
     chunks: List[Dict[str, Any]] = []
     try:
         try:
@@ -227,10 +267,6 @@ def extract_text_chunks_from_pdf(
 def generate_embeddings_for_chunks(
     chunks: Union[List[Dict[str, Any]], List[str]]
 ) -> Union[List[Dict[str, Any]], List[Optional[List[float]]]]:
-    """
-    Generates embeddings using the active Gemini embedding model.
-    Gracefully handles rate-limits or fallback without blocking the main workflow.
-    """
     if not chunks:
         return []
 
@@ -254,7 +290,6 @@ def generate_embeddings_for_chunks(
 
         for emb_model in embedding_models:
             try:
-                # Request 768 output dimensions natively
                 try:
                     res = client.models.embed_content(
                         model=emb_model,
@@ -272,12 +307,11 @@ def generate_embeddings_for_chunks(
                     for e in res.embeddings:
                         vals = getattr(e, "values", None)
                         if vals is not None and isinstance(vals, list):
-                            # Enforce exactly 768 dimensions for pgvector column
                             if len(vals) > 768:
                                 vals = vals[:768]
                             elif len(vals) < 768:
                                 vals = vals + [0.0] * (768 - len(vals))
-                        batch_embeddings.append(vals)
+                            batch_embeddings.append(vals)
                     break
             except Exception as e:
                 logger.warning(f"Embedding model '{emb_model}' attempt failed: {str(e)}")
@@ -304,17 +338,17 @@ You are an expert Curriculum Engineer and Instructional Designer for the EduGrap
 Analyze the uploaded course document(s) and synthesize a cohesive, structured, pedagogical Directed Acyclic Graph (DAG) Knowledge Graph.
 
 CRITICAL INSTRUCTIONS:
-1. TOPOLOGY & KNOWLEDGE GRAPH:
-   - Synthesize all primary topics across the uploaded material into ordered learning concepts.
-   - Extract concepts as ordered nodes with unique lowercase keys ('node_1', 'node_2', 'node_3', etc.).
-   - Create directed edges (source_node_key -> target_node_key) defining prerequisite learning flow forming a valid DAG with NO cycles.
+1. TOPOLOGY & KNOWLEDGE GRAPH (STRICT LINEAR SEQUENCE):
+   - Synthesize all primary topics across the uploaded material into a STRICTLY LINEAR, sequential learning chain (Node 1 -> Node 2 -> Node 3 -> Node 4 -> etc.).
+   - DO NOT create parallel branches, forks, or multiple child/parent branches. Every node (except the first and last) must have exactly 1 incoming edge and 1 outgoing edge forming a straight vertical sequence.
+   - Extract concepts as ordered nodes with unique lowercase keys ('node_1', 'node_2', 'node_3', 'node_4', etc.).
+   - Create directed edges forming a strict sequential flow (e.g., node_1 -> node_2, node_2 -> node_3, node_3 -> node_4).
 
 2. DYNAMIC NODE QUANTITY & GRANULARITY:
-   - Scale the number of nodes appropriately according to content depth across all uploaded documents:
-     * Brief material (1-20 pages): 3-5 nodes.
-     * Medium scope (21-60 pages): 6-8 nodes.
-     * Comprehensive curriculum (60+ pages): 9-14 nodes.
-   - Group closely related sub-topics into comprehensive, self-contained nodes.
+   - Scale the number of nodes appropriately according to content depth across all uploaded documents, maintaining a strict linear chain:
+     * Brief material (1-20 pages): 3-5 sequential nodes.
+     * Medium scope (21-60 pages): 6-8 sequential nodes.
+     * Comprehensive curriculum (60+ pages): 9-14 sequential nodes.
 
 3. NODE CONTENT, SUMMARY & FORMATTING:
    - Target Depth Level: University / Rigorous Academic standard.
@@ -345,14 +379,6 @@ CRITICAL INSTRUCTIONS:
 def extract_course_graph_from_multiple_pdfs(
     documents: Union[List[Dict[str, Any]], List[tuple[bytes, str]], List[bytes]]
 ) -> Dict[str, Any]:
-    """
-    Ingests multiple PDF documents, sends them to Gemini for unified Concept Knowledge Graph extraction,
-    generates 20 quiz questions per node (Set 1 & Set 2), calculates DAG coordinates, and returns DB-ready payload.
-    Supports documents as:
-      - List of dicts: [{"bytes": b"...", "file_name": "...", "mime_type": "application/pdf"}]
-      - List of tuples: [(b"...", "file_name.pdf")]
-      - List of raw bytes: [b"..."]
-    """
     if not documents:
         raise ValueError("At least one document must be provided for graph extraction.")
 
@@ -386,25 +412,55 @@ def extract_course_graph_from_multiple_pdfs(
 
         response = None
         last_error = None
+        max_retries = 3
+        backoff_factor = 2  # 2s, 4s, 8s
+
         for model_name in candidate_models:
-            try:
-                logger.info(f"Attempting Gemini graph extraction with model: {model_name}")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=parts,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=CourseGraphExtractionSchema,
-                        temperature=GEMINI_INGESTION_TEMPERATURE,
-                        max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
+            success = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    logger.info(f"Attempting Gemini graph extraction with model: {model_name} (Attempt {attempt}/{max_retries})")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=parts,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=CourseGraphExtractionSchema,
+                            temperature=GEMINI_INGESTION_TEMPERATURE,
+                            max_output_tokens=GEMINI_INGESTION_MAX_TOKENS,
+                        )
                     )
-                )
-                if response and response.text:
-                    logger.info(f"Successfully generated graph with model: {model_name}")
+                    if response and response.text:
+                        logger.info(f"Successfully generated graph with model: {model_name}")
+                        success = True
+                        break
+                except APIError as api_err:
+                    last_error = api_err
+                    if api_err.code in (503, 404) or "UNAVAILABLE" in str(api_err) or "NOT_FOUND" in str(api_err):
+                        if attempt < max_retries and api_err.code != 404:
+                            sleep_time = backoff_factor ** attempt
+                            logger.warning(
+                                f"Model '{model_name}' returned error {api_err.code}. "
+                                f"Retrying in {sleep_time} seconds..."
+                            )
+                            time.sleep(sleep_time)
+                            continue
+                        else:
+                            logger.warning(
+                                f"Model '{model_name}' failed or deprecated (404/503). "
+                                f"Switching to next candidate model."
+                            )
+                            break
+                    else:
+                        logger.warning(f"API Error with model '{model_name}': {str(api_err)}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Generation attempt with model '{model_name}' failed: {str(e)}")
+                    last_error = e
                     break
-            except Exception as e:
-                logger.warning(f"Generation attempt with model '{model_name}' failed: {str(e)}")
-                last_error = e
+
+            if success:
+                break
 
         if not response or not response.text:
             raise RuntimeError(f"All candidate Gemini models failed. Last error: {str(last_error)}")
@@ -418,15 +474,39 @@ def extract_course_graph_from_multiple_pdfs(
             f"Tokens: Prompt={prompt_tokens}, Completion={completion_tokens}"
         )
 
-        raw_data = json.loads(response.text)
+        # Safe JSON parsing with auto-repair fallback for truncated responses
+        response_text = response.text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
 
-        # Enforce exactly 10 questions in Set 1 and 10 questions in Set 2
+        try:
+            raw_data = json.loads(response_text)
+        except json.JSONDecodeError as json_err:
+            logger.warning(f"JSON truncation detected, attempting auto-repair: {str(json_err)}")
+            fixed_text = response_text.rstrip()
+            if fixed_text.endswith(','):
+                fixed_text = fixed_text[:-1]
+            
+            # Automatically close any unclosed braces/brackets due to token ceiling cutoff
+            open_braces = fixed_text.count('{') - fixed_text.count('}')
+            open_brackets = fixed_text.count('[') - fixed_text.count(']')
+            fixed_text += '}' * max(0, open_braces) + ']' * max(0, open_brackets)
+            
+            try:
+                raw_data = json.loads(fixed_text)
+                logger.info("Successfully auto-repaired and parsed truncated JSON response!")
+            except Exception as repair_err:
+                logger.error(f"Failed to repair JSON. Snippet: {response_text[-300:]}")
+                raise RuntimeError(f"Gemini returned truncated JSON: {str(json_err)}")
+
         for node in raw_data.get("nodes", []):
             quizzes = node.get("quizzes", [])
             for index, quiz in enumerate(quizzes):
                 quiz["set_number"] = 1 if index < 10 else 2
 
-        # Format node dictionaries for calculate_dag_layout utility
         raw_nodes = raw_data.get("nodes", [])
         raw_edges = raw_data.get("edges", [])
 
@@ -448,7 +528,6 @@ def extract_course_graph_from_multiple_pdfs(
             for e in raw_edges
         ]
 
-        # Calculate (x, y) DAG Coordinates
         positioned_nodes = calculate_dag_layout(node_dicts_for_layout, edge_tuples)
 
         return {
@@ -473,7 +552,6 @@ def extract_course_graph_from_pdf(
     pdf_bytes: bytes, 
     mime_type: str = "application/pdf"
 ) -> Dict[str, Any]:
-    """Single-PDF compatibility wrapper for extract_course_graph_from_multiple_pdfs."""
     return extract_course_graph_from_multiple_pdfs([
         {"bytes": pdf_bytes, "file_name": "syllabus.pdf", "mime_type": mime_type}
     ])

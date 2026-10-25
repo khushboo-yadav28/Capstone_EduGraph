@@ -51,15 +51,13 @@ export default function LoginPage() {
       const userRole = meResponse.data.role;
       redirectByRole(userRole);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Authentication failed. Please check your credentials.');
-      
-      // Fallback routing for local testing UI when backend is unreachable
-      if (email.includes('admin')) {
-        redirectByRole('admin');
-      } else if (email.includes('instructor')) {
-        redirectByRole('instructor');
+      const detail = err.response?.data?.detail;
+      if (typeof detail === 'string') {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(detail.map((d: any) => d.msg || JSON.stringify(d)).join(', '));
       } else {
-        redirectByRole('student');
+        setError('Authentication failed. Please check your credentials and try again.');
       }
     } finally {
       setLoading(false);

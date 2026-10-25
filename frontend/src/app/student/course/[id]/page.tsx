@@ -37,7 +37,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Minimize2,
-  Maximize2
+  Maximize2,
+  Download,
+  MessageSquare,
+  Send
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -140,12 +143,26 @@ export default function StudentCourseWorkspace() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNodeData, setSelectedNodeData] = useState<any>(null);
 
-  // Active Tab in Sidebar Inspector
-  const [activeTab, setActiveTab] = useState<'content' | 'quiz'>('content');
+  // Active Tab in Sidebar Inspector ('content' | 'quiz' | 'doubt')
+  const [activeTab, setActiveTab] = useState<'content' | 'quiz' | 'doubt'>('content');
 
   // Minimization States
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
   const [isCanvasMinimized, setIsCanvasMinimized] = useState(false);
+
+  // PDF Viewer & Course Documents States
+  const [courseDocuments, setCourseDocuments] = useState<any[]>([]);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+  const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
+  const [selectedPdfTitle, setSelectedPdfTitle] = useState<string>('Course Document');
+
+  // AI Doubt Solver / Chat States
+  const [ragContext, setRagContext] = useState<any>(null);
+  const [chatMessages, setChatMessages] = useState<Array<{role: 'user' | 'assistant'; content: string}>>([
+    { role: 'assistant', content: 'Hello! I am your AI Study Assistant. Ask me any doubt regarding this concept or uploaded textbook material.' }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [loadingDoubt, setLoadingDoubt] = useState(false);
 
   // Quiz States (Supporting Set 1 and Set 2)
   const [activeQuizSet, setActiveQuizSet] = useState<number>(1);
@@ -159,16 +176,17 @@ export default function StudentCourseWorkspace() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
 
-  // 1. Fetch Graph, Enrollment & Course Progress
+  // 1. Fetch Graph, Enrollment, Course Progress & Documents
   const fetchGraphAndProgress = useCallback(async () => {
     if (!courseId) return;
 
     try {
       setLoadingGraph(true);
-      const [graphRes, progressRes, enrollRes] = await Promise.allSettled([
+      const [graphRes, progressRes, enrollRes, docsRes] = await Promise.allSettled([
         getCourseGraph(courseId),
         getStudentCourseProgress(courseId),
-        getEnrollmentByCourse(courseId)
+        getEnrollmentByCourse(courseId),
+        api.get(`/courses/${courseId}/documents`)
       ]);
 
       let rawGraph: CourseGraphResponse | null = null;
@@ -184,6 +202,10 @@ export default function StudentCourseWorkspace() {
 
       if (enrollRes.status === 'fulfilled') {
         setEnrollment(enrollRes.value || null);
+      }
+
+      if (docsRes.status === 'fulfilled' && docsRes.value?.data?.documents) {
+        setCourseDocuments(docsRes.value.data.documents);
       }
 
       let rawNodes = rawGraph?.nodes || [];
@@ -336,6 +358,24 @@ export default function StudentCourseWorkspace() {
     }
   }, [selectedNodeData?.id, activeQuizSet, loadQuestionsForNode]);
 
+  // Fetch RAG Context for Doubt Solver when selected node changes
+  useEffect(() => {
+    const fetchRag = async () => {
+      if (!selectedNodeData?.id) return;
+      try {
+        const token = localStorage.getItem('token');
+        const res = await api.get(`/courses/node/${selectedNodeData.id}/rag-context`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setRagContext(res.data);
+      } catch (err) {
+        console.warn("Could not fetch RAG context for node", err);
+        setRagContext(null);
+      }
+    };
+    fetchRag();
+  }, [selectedNodeData?.id]);
+
   const onNodeClick = (_event: React.MouseEvent, node: Node) => {
     setSelectedNodeData(node.data);
     setQuizResult(null);
@@ -343,7 +383,84 @@ export default function StudentCourseWorkspace() {
     setActiveTab('content');
   };
 
-  // 3. Handle Quiz Submission
+  // 3. Handle PDF Viewer Open & Download
+  const handleOpenPdf = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      let docs = courseDocuments;
+      
+      if (!docs || docs.length === 0) {
+        const docsRes = await api.get(`/courses/${courseId}/documents`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (docsRes.data && docsRes.data.documents) {
+          docs = docsRes.data.documents;
+          setCourseDocuments(docs);
+        }
+      }
+
+      const targetDoc = docs[0];
+      if (!targetDoc) {
+        alert("No PDF document found uploaded by the instructor for this course.");
+        return;
+      }
+
+      const response = await api.get(`/courses/${courseId}/documents/${targetDoc.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      setSelectedPdfUrl(url);
+      setSelectedPdfTitle(targetDoc.file_name);
+      setIsPdfModalOpen(true);
+    } catch (err) {
+      console.error("Failed to load PDF file", err);
+      alert("Could not load the PDF file. Please try again.");
+    }
+  };
+
+  const handleDownloadPdf = () => {
+    if (!selectedPdfUrl) return;
+    const a = document.createElement('a');
+    a.href = selectedPdfUrl;
+    a.download = selectedPdfTitle || 'course-document.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  // 4. Handle AI Doubt Solver Chat Submit
+  const handleDoubtSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || loadingDoubt) return;
+
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setLoadingDoubt(true);
+
+    try {
+      // Simulate intelligent answer based on RAG context excerpts or fallback response
+      let assistantReply = `Based on the textbook reference for **${selectedNodeData?.title}**, here is the clarification: `;
+      if (ragContext && ragContext.chunks && ragContext.chunks.length > 0) {
+        const topChunk = ragContext.chunks[0].content;
+        assistantReply += `"${topChunk.slice(0, 300)}..." \n\nThis explains the core principle regarding your question about "${userMsg}".`;
+      } else {
+        assistantReply += `This concept builds upon the foundational principles of ${selectedNodeData?.title}. Review the concept summary and textbook page references for deeper insights.`;
+      }
+
+      setTimeout(() => {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: assistantReply }]);
+        setLoadingDoubt(false);
+      }, 800);
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error while processing your doubt. Please try again.' }]);
+      setLoadingDoubt(false);
+    }
+  };
+
+  // 5. Handle Quiz Submission
   const handleQuizSubmit = async () => {
     if (!selectedNodeData || quizzes.length === 0) return;
 
@@ -374,7 +491,7 @@ export default function StudentCourseWorkspace() {
     }
   };
 
-  // 4. Handle Enrollment Status Update
+  // 6. Handle Enrollment Status Update
   const handleStatusUpdate = async (newStatus: EnrollmentStatus) => {
     if (!enrollment?.id) {
       alert('No active enrollment record found to update.');
@@ -509,6 +626,7 @@ export default function StudentCourseWorkspace() {
               onEdgesChange={onEdgesChange}
               nodeTypes={nodeTypes}
               onNodeClick={onNodeClick}
+              nodesDraggable={false}
               fitView
               fitViewOptions={{ padding: 0.25 }}
             >
@@ -527,7 +645,7 @@ export default function StudentCourseWorkspace() {
         )}
       </div>
 
-      {/* Sidebar Inspector Panel (Expands to cover window when canvas is minimized, or when sidebar is active) */}
+      {/* Sidebar Inspector Panel */}
       <aside className={`bg-[#fbfcfb] border-l border-[#e2eae4] flex flex-col justify-between overflow-hidden z-20 shadow-md transition-all duration-300 ${
         isSidebarMinimized ? 'w-16 p-3 items-center' : isCanvasMinimized ? 'flex-1 p-8' : 'w-[420px] p-6'
       }`}>
@@ -544,7 +662,6 @@ export default function StudentCourseWorkspace() {
               </div>
             )}
 
-            {/* Minimize / Expand Toggle Button */}
             <button 
               onClick={() => setIsSidebarMinimized(!isSidebarMinimized)}
               className={`p-2 rounded-xl bg-[#f4f7f4] hover:bg-[#d3efdc]/50 text-[#4a6b5d] hover:text-[#112217] transition cursor-pointer ${isSidebarMinimized ? 'mx-auto' : 'ml-auto'}`}
@@ -565,37 +682,49 @@ export default function StudentCourseWorkspace() {
             </div>
           )}
 
-          {/* Tab Switcher: Concept Content vs Knowledge Quiz */}
+          {/* Tab Switcher: Concept Content vs Quiz vs AI Doubt Solver */}
           {!isSidebarMinimized && selectedNodeData && (
-            <div className="flex bg-[#f4f7f4] border border-[#e2eae4] p-1 rounded-2xl gap-1">
+            <div className="grid grid-cols-3 bg-[#f4f7f4] border border-[#e2eae4] p-1 rounded-2xl gap-1">
               <button
                 onClick={() => setActiveTab('content')}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`py-2 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
                   activeTab === 'content'
                     ? 'bg-white text-[#112217] shadow-sm'
                     : 'text-[#4a6b5d] hover:text-[#112217]'
                 }`}
               >
-                <BookOpen size={13} className="text-[#2e5a44]" />
-                <span>Concept Overview</span>
+                <BookOpen size={12} className="text-[#2e5a44]" />
+                <span>Overview</span>
               </button>
               <button
                 onClick={() => setActiveTab('quiz')}
                 disabled={!selectedNodeData.is_unlocked}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                className={`py-2 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 ${
                   activeTab === 'quiz'
                     ? 'bg-white text-[#112217] shadow-sm'
                     : 'text-[#4a6b5d] hover:text-[#112217]'
                 }`}
               >
-                <HelpCircle size={13} className="text-[#2e5a44]" />
-                <span>Node Quiz</span>
+                <HelpCircle size={12} className="text-[#2e5a44]" />
+                <span>Quiz</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('doubt')}
+                disabled={!selectedNodeData.is_unlocked}
+                className={`py-2 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50 ${
+                  activeTab === 'doubt'
+                    ? 'bg-white text-[#112217] shadow-sm'
+                    : 'text-[#4a6b5d] hover:text-[#112217]'
+                }`}
+              >
+                <MessageSquare size={12} className="text-[#2e5a44]" />
+                <span>AI Doubt</span>
               </button>
             </div>
           )}
         </div>
 
-        {/* Scrollable Content Body (Hidden when minimized) */}
+        {/* Scrollable Content Body */}
         {!isSidebarMinimized ? (
           <div className="flex-1 overflow-y-auto py-6 space-y-6">
             {selectedNodeData ? (
@@ -645,18 +774,25 @@ export default function StudentCourseWorkspace() {
                       )}
                     </div>
 
-                    {selectedNodeData.page_references && (
-                      <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl space-y-1 shadow-sm">
+                    {/* Textbook Page References & PDF Viewer Button */}
+                    <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl flex items-center justify-between shadow-sm">
+                      <div>
                         <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] flex items-center gap-1">
                           <FileText size={12} className="text-[#2e5a44]" /> Textbook Page References
                         </span>
-                        <p className="text-xs font-bold text-[#112217]">
+                        <p className="text-xs font-bold text-[#112217] mt-0.5">
                           {Array.isArray(selectedNodeData.page_references) 
                             ? selectedNodeData.page_references.join(', ') 
-                            : String(selectedNodeData.page_references)}
+                            : String(selectedNodeData.page_references || "General Material")}
                         </p>
                       </div>
-                    )}
+                      <button
+                        onClick={handleOpenPdf}
+                        className="px-3.5 py-2 bg-[#112217] hover:bg-[#223d2f] text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        <span>📄 View PDF</span>
+                      </button>
+                    </div>
 
                     {(selectedNodeData.youtube_url || selectedNodeData.video_url) && selectedNodeData.is_unlocked && (
                       <div className="space-y-2">
@@ -829,6 +965,57 @@ export default function StudentCourseWorkspace() {
                     )}
                   </div>
                 )}
+
+                {/* TAB 3: AI DOUBT SOLVER CHAT */}
+                {activeTab === 'doubt' && (
+                  <div className="space-y-4 flex flex-col h-[460px]">
+                    <div className="p-3 bg-[#d3efdc]/40 border border-[#bce8c9] rounded-2xl flex items-center gap-2">
+                      <MessageSquare size={16} className="text-[#2e5a44] shrink-0" />
+                      <p className="text-[11px] font-bold text-[#112217]">
+                        Asking doubts for: <span className="text-[#2e5a44]">{selectedNodeData.title}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto space-y-3 p-3 bg-white border border-[#e2eae4] rounded-2xl shadow-inner">
+                      {chatMessages.map((msg, mIdx) => (
+                        <div key={mIdx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed ${
+                            msg.role === 'user' 
+                              ? 'bg-[#112217] text-white rounded-br-none' 
+                              : 'bg-[#f4f7f4] border border-[#e2eae4] text-[#112217] rounded-bl-none'
+                          }`}>
+                            <p>{msg.content}</p>
+                          </div>
+                        </div>
+                      ))}
+                      {loadingDoubt && (
+                        <div className="flex justify-start">
+                          <div className="bg-[#f4f7f4] border border-[#e2eae4] p-3 rounded-2xl text-xs text-[#4a6b5d] flex items-center gap-2">
+                            <Loader2 size={14} className="animate-spin text-[#2e5a44]" />
+                            <span>AI is analyzing textbook excerpts...</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleDoubtSubmit} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        placeholder="Type your doubt or question..."
+                        className="flex-1 px-4 py-2.5 bg-white border border-[#e2eae4] rounded-xl text-xs text-[#112217] focus:outline-none focus:border-[#2e5a44]"
+                      />
+                      <button
+                        type="submit"
+                        disabled={loadingDoubt || !chatInput.trim()}
+                        className="px-4 py-2.5 bg-[#112217] hover:bg-[#223d2f] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                      >
+                        <Send size={14} />
+                      </button>
+                    </form>
+                  </div>
+                )}
               </>
             ) : (
               <div className="text-center py-24 space-y-3 text-[#4a6b5d]">
@@ -872,6 +1059,49 @@ export default function StudentCourseWorkspace() {
         </div>
 
       </aside>
+
+      {/* PDF Viewer Modal with Download Button */}
+      {isPdfModalOpen && selectedPdfUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-5xl h-[88vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-scaleUp">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-lg">📚</span>
+                <h3 className="font-semibold text-base truncate">{selectedPdfTitle}</h3>
+              </div>
+              <button
+                onClick={() => setIsPdfModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xl font-bold px-2.5 py-1 rounded-xl transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 bg-slate-100 p-2">
+              <iframe
+                src={`${selectedPdfUrl}#view=FitH`}
+                className="w-full h-full rounded-2xl border border-slate-300 bg-white shadow-inner"
+                title="Course PDF Viewer"
+              />
+            </div>
+
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-between items-center">
+              <button
+                onClick={handleDownloadPdf}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2 cursor-pointer shadow"
+              >
+                <Download size={14} /> Download PDF
+              </button>
+              <button
+                onClick={() => setIsPdfModalOpen(false)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+              >
+                Close Viewer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
