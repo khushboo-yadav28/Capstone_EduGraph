@@ -24,7 +24,8 @@ import {
   Trash2,
   Link2,
   Sliders,
-  Move
+  Move,
+  Sparkles
 } from 'lucide-react';
 import { 
   ReactFlow, 
@@ -86,17 +87,20 @@ export default function InstructorCourseDetailPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Instructor vs Student Preview Toggle State inside the same view
+  const [isPreviewMode, setIsPreviewMode] = useState(false);
+
   // React Flow Canvas States
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
 
-  // Selected Node State for Editing
+  // Selected Node State for Editing / Preview
   const [selectedNode, setSelectedNode] = useState<RawNodeData | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editSummary, setEditSummary] = useState('');
   const [inspectorTab, setInspectorTab] = useState<'edit' | 'preview' | 'quizzes'>('edit');
 
-  // Fetch Knowledge Graph from Backend (GET /courses/instructor/{course_id}/graph)
+  // Fetch Knowledge Graph from Backend
   const fetchCourseData = useCallback(async () => {
     if (!courseId) return;
     try {
@@ -133,16 +137,16 @@ export default function InstructorCourseDetailPage() {
           position: { x: posX, y: posY },
           style: {
             background: '#ffffff',
-            border: '2px solid #112217',
+            border: isPreviewMode && index > 0 ? '2px dashed #94a3b8' : '2px solid #112217',
             borderRadius: '20px',
             padding: '12px 18px',
             fontSize: '11px',
             fontWeight: '800',
-            color: '#112217',
+            color: isPreviewMode && index > 0 ? '#64748b' : '#112217',
             boxShadow: '0 4px 10px -2px rgba(17, 34, 23, 0.08)',
             width: 210,
             textAlign: 'center',
-            cursor: 'grab'
+            cursor: 'pointer'
           }
         };
       });
@@ -180,7 +184,7 @@ export default function InstructorCourseDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [courseId]);
+  }, [courseId, isPreviewMode]);
 
   useEffect(() => {
     fetchCourseData();
@@ -189,24 +193,27 @@ export default function InstructorCourseDetailPage() {
   // Node position drag change handler
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
+      if (isPreviewMode) return; // Prevent layout modifications during student preview
       setNodes((nds) => applyNodeChanges(changes, nds));
       setHasUnsavedChanges(true);
     },
-    []
+    [isPreviewMode]
   );
 
   // Edge changes handler
   const onEdgesChange: OnEdgesChange = useCallback(
     (changes) => {
+      if (isPreviewMode) return;
       setEdges((eds) => applyEdgeChanges(changes, eds));
       setHasUnsavedChanges(true);
     },
-    []
+    [isPreviewMode]
   );
 
   // Connect new prerequisite edge
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
+      if (isPreviewMode) return;
       setEdges((eds) => addEdge({
         ...connection,
         animated: true,
@@ -215,7 +222,7 @@ export default function InstructorCourseDetailPage() {
       }, eds));
       setHasUnsavedChanges(true);
     },
-    []
+    [isPreviewMode]
   );
 
   // Click on node in canvas
@@ -230,7 +237,7 @@ export default function InstructorCourseDetailPage() {
 
   // Sync edits from sidebar to local nodes state
   const handleApplyNodeTextEdit = () => {
-    if (!selectedNode) return;
+    if (isPreviewMode || !selectedNode) return;
 
     setNodes((currentNodes) =>
       currentNodes.map((n) => {
@@ -259,6 +266,7 @@ export default function InstructorCourseDetailPage() {
 
   // PUT /courses/instructor/{course_id}/graph
   const handleSaveGraphLayout = async () => {
+    if (isPreviewMode) return;
     setSaving(true);
     setStatusMessage(null);
 
@@ -367,10 +375,15 @@ export default function InstructorCourseDetailPage() {
               <Upload size={16} /> Fast Ingest Material
             </button>
             <button 
-              onClick={() => router.push(`/student/course/${courseId}`)}
-              className="w-full flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition text-left cursor-pointer"
+              onClick={() => {
+                setIsPreviewMode(!isPreviewMode);
+                setInspectorTab('preview');
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition text-left cursor-pointer ${
+                isPreviewMode ? 'bg-[#2e5a44] text-white shadow-sm' : 'text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217]'
+              }`}
             >
-              <Eye size={16} /> Student Preview
+              <Eye size={16} /> {isPreviewMode ? 'Exit Student Preview' : 'Student Preview'}
             </button>
           </nav>
         </div>
@@ -397,7 +410,7 @@ export default function InstructorCourseDetailPage() {
             </button>
             <div>
               <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44] flex items-center gap-1">
-                <Sliders size={12} /> ADVANCED GRAPH EDITOR
+                <Sliders size={12} /> {isPreviewMode ? 'STUDENT PREVIEW MODE (INSTRUCTOR SIDE)' : 'ADVANCED GRAPH EDITOR'}
               </span>
               <h2 className="text-sm font-black text-[#112217] truncate max-w-sm">
                 {courseTitle || 'Curriculum Workspace'}
@@ -406,20 +419,38 @@ export default function InstructorCourseDetailPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {hasUnsavedChanges && (
+            <button
+              onClick={() => {
+                setIsPreviewMode(!isPreviewMode);
+                if (!isPreviewMode) setInspectorTab('preview');
+                else setInspectorTab('edit');
+              }}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-sm ${
+                isPreviewMode 
+                  ? 'bg-amber-500 text-white hover:bg-amber-600' 
+                  : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+              }`}
+            >
+              <Eye size={14} />
+              <span>{isPreviewMode ? 'Switch to Edit Mode' : 'Preview Student View'}</span>
+            </button>
+
+            {hasUnsavedChanges && !isPreviewMode && (
               <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-[10px] font-bold animate-pulse">
                 Unsaved Canvas Layout
               </span>
             )}
 
-            <button 
-              onClick={handleSaveGraphLayout}
-              disabled={saving}
-              className="px-4 py-2.5 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Graph Layout'}</span>
-            </button>
+            {!isPreviewMode && (
+              <button 
+                onClick={handleSaveGraphLayout}
+                disabled={saving}
+                className="px-4 py-2.5 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Graph Layout'}</span>
+              </button>
+            )}
 
             <button 
               onClick={handlePublishCourse}
@@ -428,14 +459,6 @@ export default function InstructorCourseDetailPage() {
             >
               <Globe size={14} />
               <span>{publishing ? 'Publishing...' : 'Publish Course'}</span>
-            </button>
-
-            <button 
-              onClick={fetchCourseData} 
-              className="w-10 h-10 rounded-2xl bg-[#f4f7f4] border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:bg-[#d3efdc]/40 transition shadow-sm cursor-pointer"
-              title="Reset & Sync Graph"
-            >
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             </button>
           </div>
         </header>
@@ -459,6 +482,16 @@ export default function InstructorCourseDetailPage() {
           </div>
         )}
 
+        {/* Preview Banner Notice */}
+        {isPreviewMode && (
+          <div className="px-8 pt-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 text-xs text-amber-900 font-bold flex items-center gap-2.5 shadow-sm">
+              <Sparkles size={16} className="text-amber-600 shrink-0" />
+              <span>Instructor Student Preview: You are testing the student learning journey. Node progression locking and assessment views are simulated here without leaving the instructor portal.</span>
+            </div>
+          </div>
+        )}
+
         {/* Workspace Canvas & Inspector */}
         <div className="flex-1 flex overflow-hidden p-6 gap-6 bg-[#f4f7f4]">
           
@@ -466,9 +499,11 @@ export default function InstructorCourseDetailPage() {
           <div className="flex-1 bg-white border border-[#e2eae4] rounded-[32px] overflow-hidden shadow-sm flex flex-col relative">
             <div className="p-4 bg-white/90 backdrop-blur-sm border-b border-[#e2eae4] flex items-center justify-between z-10">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-black text-[#112217]">Interactive Canvas:</span>
+                <span className="text-xs font-black text-[#112217]">
+                  {isPreviewMode ? 'Student Learning Graph Preview:' : 'Interactive Canvas:'}
+                </span>
                 <span className="text-[11px] text-[#4a6b5d] font-medium">
-                  Drag nodes to adjust layout • Drag from handle to link prerequisites
+                  {isPreviewMode ? 'Click nodes to inspect learning materials & student quizzes' : 'Drag nodes to adjust layout • Drag from handle to link prerequisites'}
                 </span>
               </div>
               <span className="text-[10px] font-bold bg-[#d3efdc]/60 text-[#112217] px-3 py-1 rounded-xl border border-[#bce8c9]">
@@ -492,6 +527,8 @@ export default function InstructorCourseDetailPage() {
                   onNodeClick={onNodeClick}
                   fitView
                   fitViewOptions={{ padding: 0.2 }}
+                  nodesDraggable={!isPreviewMode}
+                  nodesConnectable={!isPreviewMode}
                 >
                   <Background color="#cbd5e1" gap={20} size={1} />
                   <Controls className="!bg-white !border-[#e2eae4] !rounded-2xl !shadow-md" />
@@ -508,7 +545,9 @@ export default function InstructorCourseDetailPage() {
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-[#e2eae4] pb-3">
                   <div>
-                    <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d]">Node Inspector</span>
+                    <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d]">
+                      {isPreviewMode ? 'Student Node Viewer' : 'Node Inspector'}
+                    </span>
                     <h3 className="text-sm font-black text-[#112217]">{selectedNode.title}</h3>
                   </div>
                   <span className="text-[10px] font-mono font-bold bg-[#f4f7f4] px-2.5 py-1 rounded-xl border border-[#e2eae4] text-[#4a6b5d]">
@@ -518,40 +557,36 @@ export default function InstructorCourseDetailPage() {
 
                 {/* Inspector Tabs */}
                 <div className="flex bg-[#f4f7f4] border border-[#e2eae4] p-1 rounded-2xl gap-1">
-                  <button
-                    onClick={() => setInspectorTab('edit')}
-                    className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
-                      inspectorTab === 'edit'
-                        ? 'bg-white text-[#112217] shadow-sm'
-                        : 'text-[#4a6b5d] hover:text-[#112217]'
-                    }`}
-                  >
-                    <Edit3 size={13} /> Edit
-                  </button>
+                  {!isPreviewMode && (
+                    <button
+                      onClick={() => setInspectorTab('edit')}
+                      className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                        inspectorTab === 'edit' ? 'bg-white text-[#112217] shadow-sm' : 'text-[#4a6b5d] hover:text-[#112217]'
+                      }`}
+                    >
+                      <Edit3 size={13} /> Edit
+                    </button>
+                  )}
                   <button
                     onClick={() => setInspectorTab('preview')}
                     className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
-                      inspectorTab === 'preview'
-                        ? 'bg-white text-[#112217] shadow-sm'
-                        : 'text-[#4a6b5d] hover:text-[#112217]'
+                      inspectorTab === 'preview' ? 'bg-white text-[#112217] shadow-sm' : 'text-[#4a6b5d] hover:text-[#112217]'
                     }`}
                   >
-                    <Eye size={13} /> Preview
+                    <Eye size={13} /> Summary
                   </button>
                   <button
                     onClick={() => setInspectorTab('quizzes')}
                     className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
-                      inspectorTab === 'quizzes'
-                        ? 'bg-white text-[#112217] shadow-sm'
-                        : 'text-[#4a6b5d] hover:text-[#112217]'
+                      inspectorTab === 'quizzes' ? 'bg-white text-[#112217] shadow-sm' : 'text-[#4a6b5d] hover:text-[#112217]'
                     }`}
                   >
                     <HelpCircle size={13} /> Quizzes ({selectedNode.quizzes?.length || 0})
                   </button>
                 </div>
 
-                {/* TAB 1: EDIT FORM */}
-                {inspectorTab === 'edit' && (
+                {/* TAB 1: EDIT FORM (Only in Edit Mode) */}
+                {!isPreviewMode && inspectorTab === 'edit' && (
                   <div className="space-y-4">
                     <div>
                       <label className="block text-xs font-bold text-[#4a6b5d] mb-1 uppercase tracking-wider">
@@ -590,10 +625,10 @@ export default function InstructorCourseDetailPage() {
                 {inspectorTab === 'preview' && (
                   <div className="space-y-3">
                     <span className="text-[10px] font-extrabold uppercase text-[#4a6b5d] block">
-                      Rendered Markdown Summary
+                      {isPreviewMode ? 'Student Learning Content' : 'Rendered Markdown Summary'}
                     </span>
-                    <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl text-xs text-[#1e2923] prose prose-xs max-w-none shadow-sm">
-                      <ReactMarkdown>{editSummary || 'No summary text entered.'}</ReactMarkdown>
+                    <div className="p-4 bg-white border border-[#e2eae4] rounded-2xl text-xs text-[#1e2923] prose prose-xs max-w-none shadow-sm max-h-96 overflow-y-auto">
+                      <ReactMarkdown>{editSummary || selectedNode.summary || 'No summary text entered.'}</ReactMarkdown>
                     </div>
                   </div>
                 )}
@@ -640,24 +675,26 @@ export default function InstructorCourseDetailPage() {
                 <div className="w-12 h-12 rounded-2xl bg-white border border-[#e2eae4] flex items-center justify-center mx-auto shadow-sm">
                   <Move size={20} className="text-[#2e5a44]" />
                 </div>
-                <p className="text-xs font-bold text-[#112217]">Select Node to Edit</p>
+                <p className="text-xs font-bold text-[#112217]">Select Node to Inspect</p>
                 <p className="text-[11px] text-[#4a6b5d] max-w-xs mx-auto">
-                  Click any node on the graph canvas to modify its title, concept summary, or inspect quiz questions.
+                  Click any node on the graph canvas to view summaries, quiz banks, or modify layout.
                 </p>
               </div>
             )}
 
             {/* Quick Actions Footer */}
-            <div className="pt-4 border-t border-[#e2eae4] space-y-2">
-              <button 
-                onClick={handleSaveGraphLayout}
-                disabled={saving}
-                className="w-full py-3 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <Save size={14} />
-                <span>Save All Layout Changes</span>
-              </button>
-            </div>
+            {!isPreviewMode && (
+              <div className="pt-4 border-t border-[#e2eae4] space-y-2">
+                <button 
+                  onClick={handleSaveGraphLayout}
+                  disabled={saving}
+                  className="w-full py-3 bg-[#112217] text-white rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Save size={14} />
+                  <span>Save All Layout Changes</span>
+                </button>
+              </div>
+            )}
           </div>
 
         </div>

@@ -131,6 +131,9 @@ export default function StudentCourseWorkspace() {
   const router = useRouter();
   const courseId = params?.id as string;
 
+  // Session & Auth Guard States
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
   // Course Graph & Meta States
   const [courseTitle, setCourseTitle] = useState('Course Knowledge Map');
   const [courseDesc, setCourseDesc] = useState('');
@@ -175,6 +178,28 @@ export default function StudentCourseWorkspace() {
   // Enrollment Status Update State
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+
+  // 0. Verify Session on Mount to Prevent Dashboard Flash
+  useEffect(() => {
+    const verifySession = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        router.replace('/login');
+        return;
+      }
+      try {
+        await api.get('/auth/me', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setCheckingAuth(false);
+      } catch (err) {
+        console.error('Session verification failed', err);
+        localStorage.removeItem('token');
+        router.replace('/login');
+      }
+    };
+    verifySession();
+  }, [router]);
 
   // 1. Fetch Graph, Enrollment, Course Progress & Documents
   const fetchGraphAndProgress = useCallback(async () => {
@@ -331,8 +356,10 @@ export default function StudentCourseWorkspace() {
   }, [courseId]);
 
   useEffect(() => {
-    fetchGraphAndProgress();
-  }, [fetchGraphAndProgress]);
+    if (!checkingAuth) {
+      fetchGraphAndProgress();
+    }
+  }, [checkingAuth, fetchGraphAndProgress]);
 
   // 2. Fetch Quiz Questions for Selected Node
   const loadQuestionsForNode = useCallback(async (nodeId: string, setNumber: number) => {
@@ -441,7 +468,6 @@ export default function StudentCourseWorkspace() {
     setLoadingDoubt(true);
 
     try {
-      // Simulate intelligent answer based on RAG context excerpts or fallback response
       let assistantReply = `Based on the textbook reference for **${selectedNodeData?.title}**, here is the clarification: `;
       if (ragContext && ragContext.chunks && ragContext.chunks.length > 0) {
         const topChunk = ragContext.chunks[0].content;
@@ -522,6 +548,18 @@ export default function StudentCourseWorkspace() {
     const startParam = timestamp ? `?start=${timestamp}` : '';
     return `https://www.youtube.com/embed/${videoId}${startParam}`;
   };
+
+  // Prevent any dashboard rendering during authentication check
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-[#f4f7f4] flex items-center justify-center">
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+          <Loader2 size={20} className="animate-spin text-[#2e5a44]" />
+          Verifying session...
+        </div>
+      </div>
+    );
+  }
 
   const completedNodesCount = nodes.filter((n) => n.data?.status === 'COMPLETED').length;
   const totalNodesCount = nodes.length || 1;

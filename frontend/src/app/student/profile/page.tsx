@@ -1,44 +1,89 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { 
   Network, 
   BookOpen, 
   GitBranch, 
   TrendingUp, 
+  Award, 
   User, 
-  HelpCircle, 
-  Bell, 
-  LogOut, 
-  Save, 
-  CheckCircle2,
-  Shield
+  LogOut,
+  GraduationCap,
+  Loader2
 } from 'lucide-react';
+import { api } from '@/src/lib/api';
 
 export default function StudentProfilePage() {
   const router = useRouter();
-  const [name, setName] = useState('Student User');
-  const [email, setEmail] = useState('student@gmail.com');
-  const [saved, setSaved] = useState(false);
+  const pathname = usePathname();
+
+  const navItems = [
+    { label: 'My Courses', path: '/student/dashboard', icon: BookOpen },
+    { label: 'Knowledge Graphs', path: '/student/catalog', icon: GitBranch },
+    { label: 'Progress', path: '/student/progress', icon: TrendingUp },
+    { label: 'Badges & Certificates', path: '/student/badges', icon: Award },
+    { label: 'Profile & Settings', path: '/student/profile', icon: User },
+  ];
 
   const handleLogout = () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('userRole');
-    router.push('/login');
+    sessionStorage.clear();
+    router.replace('/login');
   };
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-  };
+  // Profile Data States
+  const [profile, setProfile] = useState({
+    fullName: '',
+    email: '',
+    program: '',
+    semester: '',
+    enrollmentNumber: '',
+    department: '',
+    batch: '',
+    academicYear: '',
+    bio: ''
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        setLoading(true);
+        const response = await api.get('/auth/me');
+        const data = response.data;
+        const stuProfile = data.student_profile || {};
+
+        setProfile({
+          fullName: data.full_name || 'N/A',
+          email: data.email || 'N/A',
+          program: stuProfile.program || 'N/A',
+          semester: stuProfile.semester || 'N/A',
+          enrollmentNumber: stuProfile.enrollment_number || 'N/A',
+          department: stuProfile.department || 'N/A',
+          batch: stuProfile.batch || 'N/A',
+          academicYear: stuProfile.academic_year || 'N/A',
+          bio: stuProfile.bio || 'No student bio provided.'
+        });
+      } catch (err: any) {
+        console.error('Failed to fetch student profile', err);
+        setErrorMsg(err.response?.data?.detail || 'Failed to load profile details.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProfile();
+  }, []);
 
   return (
-    <div className="flex h-screen w-full bg-[#f4f7f4] text-[#1e2923] overflow-hidden selection:bg-[#2e5a44] selection:text-white">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#f4f7f4] text-[#1e2923]">
       
-      {/* Sidebar matching theme */}
-      <aside className="w-64 bg-white border-r border-[#e2eae4] p-6 flex flex-col justify-between hidden md:flex shadow-sm">
+      {/* 1. Permanent Unified Sidebar */}
+      <aside className="w-64 bg-white border-r border-[#e2eae4] p-6 flex flex-col justify-between shrink-0 shadow-sm z-20">
         <div className="space-y-8">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push('/')}>
             <div className="w-10 h-10 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md">
@@ -48,43 +93,46 @@ export default function StudentProfilePage() {
           </div>
 
           <nav className="space-y-1.5">
-            <a href="/student/dashboard" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
-              <BookOpen size={16} /> My Courses
-            </a>
-            <a href="/student/catalog" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
-              <GitBranch size={16} /> Knowledge Graphs
-            </a>
-            <a href="/student/progress" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
-              <TrendingUp size={16} /> Progress
-            </a>
-            <a href="/student/profile" className="flex items-center gap-3 px-4 py-3 bg-[#d3efdc]/50 text-[#112217] rounded-2xl text-xs font-bold shadow-sm">
-              <User size={16} className="text-[#2e5a44]" /> Profile & Settings
-            </a>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.path;
+              return (
+                <button
+                  key={item.path}
+                  onClick={() => router.push(item.path)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition cursor-pointer ${
+                    isActive
+                      ? 'bg-[#d3efdc]/60 text-[#112217] shadow-sm'
+                      : 'text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217]'
+                  }`}
+                >
+                  <Icon size={16} className={isActive ? 'text-[#2e5a44]' : 'text-slate-400'} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
           </nav>
         </div>
 
         <button 
           onClick={handleLogout}
-          className="flex items-center gap-2 text-xs font-bold text-rose-600 hover:text-rose-700 transition px-3 py-2 rounded-xl hover:bg-rose-50 w-fit"
+          className="flex items-center gap-2 text-xs font-bold text-rose-600 hover:text-rose-700 transition px-3 py-2 rounded-xl hover:bg-rose-50 w-fit cursor-pointer"
         >
           <LogOut size={15} /> Logout
         </button>
       </aside>
 
-      {/* Main Container */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden">
+      {/* 2. Main Viewport Container */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#f4f7f4]">
         
         {/* Top Header Navbar */}
-        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between z-10 shadow-sm">
+        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between shrink-0 z-10 shadow-sm">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44]">STUDENT PORTAL</span>
-            <h2 className="text-base font-black text-[#112217]">Student Profile & Settings</h2>
+            <h2 className="text-base font-black text-[#112217]">Profile & Settings</h2>
           </div>
-
+          
           <div className="flex items-center gap-4">
-            <button className="w-10 h-10 rounded-full bg-[#f4f7f4] border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:bg-[#d3efdc]/30 transition">
-              <Bell size={16} />
-            </button>
             <div className="flex items-center gap-3 pl-3 border-l border-[#e2eae4]">
               <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => router.push('/student/profile')}>
                 <div className="w-9 h-9 rounded-full bg-[#112217] text-white flex items-center justify-center text-xs font-bold shadow-md">
@@ -92,9 +140,11 @@ export default function StudentProfilePage() {
                 </div>
                 <span className="text-xs font-bold text-[#112217]">Student ▾</span>
               </div>
+              
               <button 
-                onClick={handleLogout} 
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition text-xs font-bold border border-rose-100"
+                onClick={handleLogout}
+                title="Logout"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition text-xs font-bold border border-rose-100 cursor-pointer"
               >
                 <LogOut size={14} />
                 <span>Logout</span>
@@ -103,67 +153,104 @@ export default function StudentProfilePage() {
           </div>
         </header>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 space-y-6 max-w-3xl bg-[#f4f7f4]">
-          
-          <div className="bg-[#fbfcfb] border border-[#e2eae4] rounded-[32px] p-8 sm:p-10 shadow-xl space-y-6">
-            <div className="flex items-center gap-4 border-b border-[#e2eae4] pb-6">
-              <div className="w-14 h-14 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold text-xl shadow-md">
-                S
+        {/* Scrollable Page Content Viewport */}
+        <div className="flex-1 overflow-y-auto bg-[#f4f7f4] p-8 min-h-0">
+          <div className="max-w-4xl mx-auto space-y-6">
+            {loading ? (
+              <div className="flex items-center justify-center py-20 text-xs text-slate-500 gap-2 font-medium">
+                <Loader2 size={18} className="animate-spin text-[#2e5a44]" />
+                Loading student profile...
               </div>
-              <div>
-                <h3 className="text-lg font-black text-[#112217]">Student Account Profile</h3>
-                <p className="text-xs text-[#4a6b5d]">Manage your personal credentials and notification preferences.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSave} className="space-y-5">
-              <div>
-                <label className="block text-xs font-bold text-[#4a6b5d] mb-1.5 uppercase tracking-wider">Full Name</label>
-                <input 
-                  type="text" 
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-white border border-[#e2eae4] rounded-2xl px-4 py-3 text-xs text-[#112217] focus:outline-none focus:ring-2 focus:ring-[#112217] shadow-sm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-[#4a6b5d] mb-1.5 uppercase tracking-wider">Email Address</label>
-                <input 
-                  type="email" 
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white border border-[#e2eae4] rounded-2xl px-4 py-3 text-xs text-[#112217] focus:outline-none focus:ring-2 focus:ring-[#112217] shadow-sm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-[#4a6b5d] mb-1.5 uppercase tracking-wider">Account Role</label>
-                <div className="flex items-center gap-2.5 p-3.5 bg-white rounded-2xl border border-[#e2eae4] text-xs text-[#4a6b5d] font-semibold shadow-sm">
-                  <Shield size={16} className="text-[#2e5a44]" />
-                  <span className="capitalize">Student (Linked to FastAPI Auth System)</span>
+            ) : (
+              <div className="bg-white border border-[#e2eae4] rounded-[28px] p-8 shadow-sm space-y-6">
+                
+                <div className="flex items-center gap-4 border-b border-[#e2eae4] pb-6">
+                  <div className="w-14 h-14 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-black text-xl shadow-md">
+                    {profile.fullName ? profile.fullName.charAt(0).toUpperCase() : 'S'}
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-[#112217]">Student Academic Profile</h3>
+                    <p className="text-xs text-[#4a6b5d]">Registered credentials and academic specifications from registration.</p>
+                  </div>
                 </div>
-              </div>
 
-              <button 
-                type="submit"
-                className="bg-[#112217] text-white px-6 py-3.5 rounded-2xl text-xs font-bold hover:bg-[#223d2f] transition shadow-lg flex items-center gap-2 cursor-pointer"
-              >
-                <Save size={15} /> Save Profile Changes
-              </button>
-            </form>
+                {errorMsg && (
+                  <div className="p-3.5 rounded-2xl border text-xs font-semibold flex items-center gap-2 bg-rose-50 border-rose-200 text-rose-800">
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
 
-            {saved && (
-              <div className="p-4 bg-[#d3efdc]/50 border border-[#bce8c9] text-[#112217] text-xs rounded-2xl flex items-center gap-2 font-bold shadow-sm">
-                <CheckCircle2 size={16} className="text-[#2e5a44]" />
-                <span>Profile updated successfully!</span>
+                {/* Read-Only Details Grid */}
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Full Name</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.fullName}</p>
+                    </div>
+
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Email Address</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.email}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Academic Program / Degree</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.program}</p>
+                    </div>
+
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Current Semester / Year</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.semester}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Enrollment / Roll Number</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.enrollmentNumber}</p>
+                    </div>
+
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Academic Department</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.department}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Batch / Cohort Year</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.batch}</p>
+                    </div>
+
+                    <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                      <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Academic Year</span>
+                      <p className="text-xs font-bold text-[#112217]">{profile.academicYear}</p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                    <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Student Bio / Summary</span>
+                    <p className="text-xs font-medium text-[#1e2923] leading-relaxed">{profile.bio}</p>
+                  </div>
+
+                  <div className="p-4 bg-[#fbfcfb] rounded-2xl border border-[#e2eae4] space-y-1">
+                    <span className="text-[10px] font-extrabold text-[#4a6b5d] uppercase tracking-wider">Assigned System Role</span>
+                    <div className="flex items-center gap-2 pt-1 text-xs text-[#112217] font-bold">
+                      <GraduationCap size={15} className="text-[#2e5a44]" />
+                      <span>Student (Knowledge Graph Learning & Assessment Access)</span>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             )}
           </div>
-
         </div>
-      </main>
+
+      </div>
+
     </div>
   );
 }

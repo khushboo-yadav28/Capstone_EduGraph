@@ -257,9 +257,9 @@ export default function InstructorDashboard() {
             >
               <Upload size={16} /> Ingest Syllabus PDF
             </button>
-            <a href="/instructor/courses" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+            {/*<a href="/instructor/courses" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
               <GitBranch size={16} /> Fast Ingestion
-            </a>
+            </a>*/}
             <a href="/instructor/profile" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
               <User size={16} /> Faculty Profile
             </a>
@@ -452,15 +452,6 @@ export default function InstructorDashboard() {
                           <span>Graph Editor</span>
                         </button>
 
-                        {/* Analytics Button */}
-                        <button
-                          onClick={() => router.push(`/instructor/course/${course.id}/analytics`)}
-                          className="px-3.5 py-2 bg-[#f4f7f4] hover:bg-[#d3efdc]/50 text-[#2e5a44] border border-[#e2eae4] text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
-                          title="View Student Retention & Difficulty Heatmap"
-                        >
-                          <BarChart3 size={14} /> Analytics
-                        </button>
-
                         {/* Publish Course Button */}
                         <button 
                           onClick={() => {
@@ -541,14 +532,6 @@ export default function InstructorDashboard() {
                           title="View Student Retention & Difficulty Heatmap"
                         >
                           <BarChart3 size={14} /> Analytics
-                        </button>
-
-                        <button 
-                          onClick={() => router.push(`/student/course/${course.id}`)}
-                          className="px-3 py-2 bg-white border border-[#e2eae4] text-[#112217] rounded-xl text-xs font-bold hover:bg-[#f4f7f4] transition cursor-pointer"
-                          title="Preview student workspace"
-                        >
-                          Student View
                         </button>
                       </div>
                     </div>

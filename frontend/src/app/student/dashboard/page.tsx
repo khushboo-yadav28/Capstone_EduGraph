@@ -4,23 +4,20 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   Network, 
-  BookOpen, 
-  GitBranch, 
-  TrendingUp, 
-  User, 
-  HelpCircle, 
   Search, 
   MoreVertical, 
-  ArrowRight,
-  Bell,
-  LogOut,
+  ArrowRight, 
   Sparkles,
   Award,
   Loader2,
-  CheckCircle2,
   X,
   Download,
-  ExternalLink
+  BookOpen,
+  GitBranch,
+  TrendingUp,
+  User,
+  Bell,
+  LogOut
 } from 'lucide-react';
 import { api } from '@/src/lib/api';
 
@@ -43,19 +40,14 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
   const [badgesLoading, setBadgesLoading] = useState(true);
   const [overallProgress, setOverallProgress] = useState(0);
-
-  // Modal State for Badge Preview
   const [selectedBadge, setSelectedBadge] = useState<Badge | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-
-    // 1. Strict Authentication & Token Guard
     const rawToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     const token = rawToken && rawToken !== 'undefined' && rawToken !== 'null' && rawToken.trim() !== '' ? rawToken.trim() : null;
 
     if (!token) {
-      console.warn('StudentDashboard: Missing or invalid auth token. Redirecting immediately to /login...');
       setLoading(true);
       setAuthChecked(false);
       router.replace('/login');
@@ -67,7 +59,6 @@ export default function StudentDashboard() {
     async function fetchDashboardData() {
       try {
         setLoading(true);
-        // Fetch enrollments
         try {
           const response = await api.get('/enrollments/me');
           if (isMounted) {
@@ -80,26 +71,22 @@ export default function StudentDashboard() {
             }
           }
         } catch (err: any) {
-          console.warn('Could not fetch enrollments:', err?.response?.data || err?.message);
           if (isMounted) {
             setEnrollments([]);
             setOverallProgress(0);
           }
         }
 
-        // Fetch earned badges (GET /enrollments/badges/me)
         try {
           const badgeRes = await api.get('/enrollments/badges/me');
           if (isMounted) {
             setBadges(badgeRes.data || []);
           }
         } catch (badgeErr: any) {
-          console.warn('Failed to fetch badges:', badgeErr?.response?.data || badgeErr?.message);
           if (isMounted) {
             setBadges([]);
           }
         }
-
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -109,10 +96,7 @@ export default function StudentDashboard() {
     }
 
     fetchDashboardData();
-
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [router]);
 
   const calculateAverageProgress = (data: any[]) => {
@@ -124,7 +108,7 @@ export default function StudentDashboard() {
   const handleLogout = () => {
     localStorage.removeItem('token');
     sessionStorage.clear();
-    router.push('/login');
+    router.replace('/login');
   };
 
   const handleDownloadCertificate = async (courseId?: string, courseTitle?: string) => {
@@ -159,7 +143,6 @@ export default function StudentDashboard() {
     getCourseTitle(c).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Guard display: Render loading screen until session verification and initial fetches settle
   if (!authChecked || loading) {
     return (
       <div className="h-screen w-full bg-[#f4f7f4] flex flex-col items-center justify-center space-y-4">
@@ -168,17 +151,17 @@ export default function StudentDashboard() {
         </div>
         <div className="flex items-center gap-2 text-xs font-bold text-[#2e5a44]">
           <Loader2 size={16} className="animate-spin" />
-          <span>Verifying session & loading student dashboard...</span>
+          <span>Loading student dashboard...</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-full bg-[#f4f7f4] text-[#1e2923] overflow-hidden selection:bg-[#2e5a44] selection:text-white">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#f4f7f4] text-[#1e2923]">
       
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-[#e2eae4] p-6 flex flex-col justify-between hidden md:flex shadow-sm">
+      {/* 1. Permanent Fixed Sidebar */}
+      <aside className="w-64 bg-white border-r border-[#e2eae4] p-6 flex flex-col justify-between shrink-0 shadow-sm z-20">
         <div className="space-y-8">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push('/')}>
             <div className="w-10 h-10 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-md">
@@ -188,24 +171,21 @@ export default function StudentDashboard() {
           </div>
 
           <nav className="space-y-1.5">
-            <a href="/student/dashboard" className="flex items-center gap-3 px-4 py-3 bg-[#d3efdc]/50 text-[#112217] rounded-2xl text-xs font-bold shadow-sm">
+            <button onClick={() => router.push('/student/dashboard')} className="w-full flex items-center gap-3 px-4 py-3 bg-[#d3efdc]/60 text-[#112217] rounded-2xl text-xs font-bold shadow-sm cursor-pointer">
               <BookOpen size={16} className="text-[#2e5a44]" /> My Courses
-            </a>
-            <a href="/student/catalog" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+            </button>
+            <button onClick={() => router.push('/student/catalog')} className="w-full flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition cursor-pointer">
               <GitBranch size={16} /> Knowledge Graphs
-            </a>
-            <a href="/student/progress" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+            </button>
+            <button onClick={() => router.push('/student/progress')} className="w-full flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition cursor-pointer">
               <TrendingUp size={16} /> Progress
-            </a>
-            <a href="/student/badges" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+            </button>
+            <button onClick={() => router.push('/student/badges')} className="w-full flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition cursor-pointer">
               <Award size={16} /> Badges & Certificates
-            </a>
-            <a href="/student/profile" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
+            </button>
+            <button onClick={() => router.push('/student/profile')} className="w-full flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition cursor-pointer">
               <User size={16} /> Profile & Settings
-            </a>
-            <a href="#" className="flex items-center gap-3 px-4 py-3 text-[#4a6b5d] hover:bg-[#f4f7f4] hover:text-[#112217] rounded-2xl text-xs font-semibold transition">
-              <HelpCircle size={16} /> Help
-            </a>
+            </button>
           </nav>
         </div>
 
@@ -217,20 +197,17 @@ export default function StudentDashboard() {
         </button>
       </aside>
 
-      {/* Main Container */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden">
+      {/* 2. Main Viewport Container */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
         
         {/* Top Header Navbar */}
-        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between z-10 shadow-sm">
+        <header className="h-20 bg-white border-b border-[#e2eae4] px-8 flex items-center justify-between shrink-0 z-10 shadow-sm">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#2e5a44]">STUDENT PORTAL</span>
             <h2 className="text-base font-black text-[#112217]">Student Dashboard</h2>
           </div>
           
           <div className="flex items-center gap-4">
-            <button className="w-10 h-10 rounded-full bg-[#f4f7f4] border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:bg-[#d3efdc]/30 transition cursor-pointer">
-              <Bell size={16} />
-            </button>
             <div className="flex items-center gap-3 pl-3 border-l border-[#e2eae4]">
               <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => router.push('/student/profile')}>
                 <div className="w-9 h-9 rounded-full bg-[#112217] text-white flex items-center justify-center text-xs font-bold shadow-md">
@@ -251,7 +228,7 @@ export default function StudentDashboard() {
           </div>
         </header>
 
-        {/* Dashboard Body Scrollable Area */}
+        {/* Scrollable Page Content */}
         <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-[#f4f7f4]">
           
           {/* Welcome Banner */}
@@ -310,7 +287,7 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          {/* SECTION 2: Earned Badges & Achievements (Interactive Click for Preview & Download) */}
+          {/* SECTION 2: Earned Badges & Achievements */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -368,7 +345,7 @@ export default function StudentDashboard() {
           </div>
 
           {/* SECTION 3: My Courses & Search */}
-          <div className="space-y-4">
+          <div className="space-y-4 pb-12">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h3 className="text-sm font-bold text-[#112217]">My Courses</h3>
@@ -425,7 +402,7 @@ export default function StudentDashboard() {
                 )}
               </div>
 
-              {/* Live Preview Sidebar Card with Dynamic Overall Progress */}
+              {/* Live Preview Sidebar Card */}
               <div className="bg-[#fbfcfb] border border-[#e2eae4] rounded-[24px] p-6 shadow-sm flex flex-col items-center justify-between text-center space-y-4">
                 <div className="w-full flex justify-between items-center">
                   <span className="text-[11px] font-bold text-[#4a6b5d]">Live Graph Preview</span>
@@ -462,12 +439,12 @@ export default function StudentDashboard() {
           </div>
 
         </div>
-      </main>
+      </div>
 
       {/* Badge Detail & Download Modal */}
       {selectedBadge && (
         <div className="fixed inset-0 z-50 bg-[#112217]/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-[#e2eae4] rounded-[32px] shadow-2xl w-full max-w-md p-8 space-y-6 relative animate-in fade-in zoom-in duration-200">
+          <div className="bg-white border border-[#e2eae4] rounded-[32px] shadow-2xl w-full max-w-md p-8 space-y-6 relative">
             <button 
               onClick={() => setSelectedBadge(null)}
               className="absolute top-6 right-6 text-slate-400 hover:text-[#112217] p-1.5 rounded-xl transition cursor-pointer bg-[#f4f7f4]"
@@ -503,25 +480,6 @@ export default function StudentDashboard() {
                 <Download size={14} /> Download Verified Certificate (.png)
               </button>
             )}
-
-            {/*<div className="flex items-center gap-3 pt-1">
-              <a 
-                href={selectedBadge.badge_image_url || '#'} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="flex-1 py-3 bg-[#f4f7f4] hover:bg-[#e2eae4] text-[#112217] rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer border border-[#e2eae4]"
-              >
-                <ExternalLink size={14} /> Open Full Size
-              </a>
-
-              <a 
-                href={selectedBadge.badge_image_url || '#'} 
-                download={`${selectedBadge.badge_title.replace(/\s+/g, '_')}_Badge.png`}
-                className="flex-1 py-3 bg-[#112217] hover:bg-[#223d2f] text-white rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
-              >
-                <Download size={14} /> Download Badge
-              </a>
-            </div>*/}
           </div>
         </div>
       )}

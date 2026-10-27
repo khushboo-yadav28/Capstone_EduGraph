@@ -2,27 +2,46 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, BookOpen, Users, ArrowRight, PlayCircle } from 'lucide-react';
+import { Search, BookOpen, Users, ArrowRight, PlayCircle, Loader2 } from 'lucide-react';
+import { api } from '@/src/lib/api';
 
 export default function EduBlinkHome() {
   const router = useRouter();
   const [courses, setCourses] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchCourses() {
+    async function fetchPublishedCourses() {
       try {
-        setCourses([
-          { id: '5208c480-174a-4767-981e-35d8d38cb5ca', title: 'Advanced Data Science & Python', category: 'DATA SCIENCE', lessons: 12, students: 450 },
-          { id: '4598b62a-000e-40b6-951c-1a377c667459', title: 'Data Warehousing & Dimensional Modeling', category: 'DATA ENGINEERING', lessons: 8, students: 320 },
-          { id: '38ef3435-a4c8-485e-9199-13556f896be0', title: 'Introduction to Blockchain Technology', category: 'BLOCKCHAIN', lessons: 10, students: 610 }
-        ]);
+        setLoading(true);
+        // Correct public endpoint for published courses
+        const response = await api.get('/courses/published');
+        const data = response.data || [];
+        
+        const formattedCourses = data.map((c: any) => ({
+          id: c.id || c.uuid,
+          title: c.title || 'Untitled Course',
+          category: c.category?.name || c.department || 'GENERAL',
+          lessons: c.nodes ? c.nodes.length : 10,
+          students: c.enrolled_students_count || 300
+        }));
+
+        setCourses(formattedCourses);
       } catch (err) {
-        console.error("Error loading courses", err);
+        console.error("Error loading published courses", err);
+      } finally {
+        setLoading(false);
       }
     }
-    fetchCourses();
+    fetchPublishedCourses();
   }, []);
+
+  // Filter courses based on search query
+  const filteredCourses = courses.filter(course => 
+    course.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    course.category.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen bg-[#f4f7f4] text-[#1e2923] selection:bg-[#2e5a44] selection:text-white">
@@ -37,13 +56,13 @@ export default function EduBlinkHome() {
         <div className="flex items-center gap-6">
           <button 
             onClick={() => router.push('/student/dashboard')} 
-            className="text-xs font-bold text-[#112217] hover:opacity-75 transition"
+            className="text-xs font-bold text-[#112217] hover:opacity-75 transition cursor-pointer"
           >
             Student Portal
           </button>
           <button 
             onClick={() => router.push('/instructor/dashboard')} 
-            className="px-5 py-2.5 bg-[#112217] text-white rounded-full text-xs font-bold hover:bg-[#223d2f] transition shadow-md"
+            className="px-5 py-2.5 bg-[#112217] text-white rounded-full text-xs font-bold hover:bg-[#223d2f] transition shadow-md cursor-pointer"
           >
             Instructor Hub
           </button>
@@ -83,7 +102,7 @@ export default function EduBlinkHome() {
               />
               <button 
                 onClick={() => {}}
-                className="px-6 py-3 bg-[#112217] text-white rounded-full text-xs font-bold hover:bg-[#223d2f] transition shadow-md"
+                className="px-6 py-3 bg-[#112217] text-white rounded-full text-xs font-bold hover:bg-[#223d2f] transition shadow-md cursor-pointer"
               >
                 Search
               </button>
@@ -93,7 +112,7 @@ export default function EduBlinkHome() {
         </div>
       </section>
 
-      {/* 3. Featured Programs Section */}
+      {/* 3. Featured Programs / Published Courses Section */}
       <section className="max-w-7xl mx-auto px-8 py-12 space-y-8">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
@@ -102,32 +121,44 @@ export default function EduBlinkHome() {
           </div>
           <button 
             onClick={() => router.push('/student/dashboard')} 
-            className="text-xs font-bold text-[#2e5a44] hover:underline flex items-center gap-1"
+            className="text-xs font-bold text-[#2e5a44] hover:underline flex items-center gap-1 cursor-pointer"
           >
             View All Dashboard Courses →
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {courses.map((course) => (
-            <div key={course.id} className="bg-white rounded-3xl border border-[#e2eae4] p-6 shadow-sm hover:shadow-md transition flex flex-col justify-between space-y-6">
-              <div className="space-y-3">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-[#2e5a44] bg-[#d3efdc]/50 px-3 py-1 rounded-xl inline-block">{course.category}</span>
-                <h3 className="text-xs font-bold text-[#112217] leading-snug">{course.title}</h3>
-                <div className="flex items-center gap-6 text-xs text-[#4a6b5d] pt-4 border-t border-[#f0f4f1]">
-                  <span className="flex items-center gap-1.5"><BookOpen size={13} className="text-slate-400" /> {course.lessons} Modules</span>
-                  <span className="flex items-center gap-1.5"><Users size={13} className="text-slate-400" /> {course.students} Students</span>
+        {loading ? (
+          <div className="flex items-center justify-center py-20 text-xs text-slate-500 gap-2 font-medium">
+            <Loader2 size={18} className="animate-spin text-[#2e5a44]" />
+            Loading published courses from database...
+          </div>
+        ) : filteredCourses.length === 0 ? (
+          <div className="bg-white border border-[#e2eae4] rounded-3xl p-12 text-center space-y-3">
+            <p className="text-xs font-bold text-slate-700">No published courses found in database.</p>
+            <p className="text-[11px] text-slate-500">Go to the Instructor Hub to ingest and publish course PDFs.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {filteredCourses.map((course) => (
+              <div key={course.id} className="bg-white rounded-3xl border border-[#e2eae4] p-6 shadow-sm hover:shadow-md transition flex flex-col justify-between space-y-6">
+                <div className="space-y-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#2e5a44] bg-[#d3efdc]/50 px-3 py-1 rounded-xl inline-block">{course.category}</span>
+                  <h3 className="text-xs font-bold text-[#112217] leading-snug">{course.title}</h3>
+                  <div className="flex items-center gap-6 text-xs text-[#4a6b5d] pt-4 border-t border-[#f0f4f1]">
+                    <span className="flex items-center gap-1.5"><BookOpen size={13} className="text-slate-400" /> {course.lessons} Modules</span>
+                    <span className="flex items-center gap-1.5"><Users size={13} className="text-slate-400" /> {course.students} Students</span>
+                  </div>
                 </div>
+                <button 
+                  onClick={() => router.push(`/student/course/${course.id}`)}
+                  className="w-full py-3 bg-[#f4f7f4] text-[#112217] rounded-2xl text-xs font-semibold hover:bg-[#d3efdc] transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <PlayCircle size={14} /> Start Learning
+                </button>
               </div>
-              <button 
-                onClick={() => router.push(`/student/course/${course.id}`)}
-                className="w-full py-3 bg-[#f4f7f4] text-[#112217] rounded-2xl text-xs font-semibold hover:bg-[#d3efdc] transition flex items-center justify-center gap-1.5 shadow-sm"
-              >
-                <PlayCircle size={14} /> Start Learning
-              </button>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
     </div>

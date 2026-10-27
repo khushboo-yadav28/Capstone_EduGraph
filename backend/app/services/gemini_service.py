@@ -25,120 +25,26 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 # ==========================================
-# 1. Dynamic Model Discovery & Resolution
+# 1. Stable Model Resolution (Updated for 2026 Models)
 # ==========================================
 
-_DISCOVERED_GEN_MODELS: Optional[List[str]] = None
-_DISCOVERED_EMBED_MODELS: Optional[List[str]] = None
-
-
 def get_candidate_generation_models() -> List[str]:
-    """Discover and prioritize available Gemini generation models."""
-    global _DISCOVERED_GEN_MODELS
-
-    if _DISCOVERED_GEN_MODELS is None:
-        _DISCOVERED_GEN_MODELS = []
-
-        if client:
-            try:
-                available = []
-
-                for model in client.models.list():
-                    raw_name = getattr(model, "name", "") or ""
-                    name = raw_name.replace("models/", "").strip()
-
-                    methods = (
-                        getattr(model, "supported_generation_methods", None)
-                        or getattr(model, "supported_actions", None)
-                        or []
-                    )
-
-                    methods = {
-                        str(method).lower() for method in methods
-                    }
-
-                    if name and (
-                        "generatecontent" in methods
-                        or "generate_content" in methods
-                    ):
-                        available.append(name)
-
-                _DISCOVERED_GEN_MODELS = available
-
-                logger.info(
-                    "Discovered %d supported generation models",
-                    len(available),
-                )
-
-            except Exception as exc:
-                logger.warning(
-                    "Gemini model discovery failed: %s",
-                    exc,
-                )
-
-    preferred_models = [
-        GEMINI_PRIMARY_MODEL,
-        GEMINI_FALLBACK_MODEL,
-        "gemini-2.5-flash",
+    """Return latest supported Gemini generation models in priority order."""
+    return [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
         "gemini-flash-latest",
-        "gemini-2.5-pro",
+        GEMINI_PRIMARY_MODEL or "gemini-3.8-flash",
+        GEMINI_FALLBACK_MODEL or "gemini-3.5-flash"
     ]
-
-    discovered_models = _DISCOVERED_GEN_MODELS or []
-
-    if discovered_models:
-        available_set = set(discovered_models)
-
-        candidates = [
-            model
-            for model in preferred_models
-            if model and model in available_set
-        ]
-
-        # Append other discovered models as additional fallbacks.
-        for model in discovered_models:
-            if model not in candidates:
-                candidates.append(model)
-
-        return candidates
-
-    # Discovery failed: use configured defaults as best-effort fallbacks.
-    return list(
-        dict.fromkeys(
-            model for model in preferred_models if model
-        )
-    )
 
 
 def get_candidate_embedding_models() -> List[str]:
-    """Dynamically retrieves and prioritizes active Gemini embedding models."""
-    global _DISCOVERED_EMBED_MODELS
-    if _DISCOVERED_EMBED_MODELS is None and client:
-        try:
-            available: List[str] = []
-            for m in client.models.list():
-                raw_name = getattr(m, "name", "") or ""
-                clean_name = raw_name.replace("models/", "").strip()
-                methods = getattr(m, "supported_generation_methods", None) or getattr(m, "supported_actions", None) or []
-                methods_str = " ".join([str(x) for x in methods])
-                if "embedContent" in methods_str or "embed_content" in methods_str or "embedding" in clean_name.lower():
-                    available.append(clean_name)
-            logger.info(f"Dynamically discovered Gemini embedding models: {available}")
-            _DISCOVERED_EMBED_MODELS = available
-        except Exception as e:
-            logger.warning(f"Could not dynamically list embedding models: {e}")
-            _DISCOVERED_EMBED_MODELS = []
-
-    defaults = [
-        "text-embedding-005",
-        "text-embedding-preview",
-        "embedding-001",
+    """Return stable Gemini embedding models."""
+    return [
+        "text-embedding-004",
+        "embedding-001"
     ]
-    candidates: List[str] = []
-    for model in (_DISCOVERED_EMBED_MODELS or []) + defaults:
-        if model and model not in candidates:
-            candidates.append(model)
-    return candidates
 
 
 # ==========================================
@@ -216,7 +122,7 @@ class CourseGraphExtractionSchema(BaseModel):
 
 
 # ==========================================
-# 3. Antigravity Text Chunking & Embeddings
+# 3. Text Chunking & Embeddings
 # ==========================================
 
 def extract_text_chunks_from_pdf(
@@ -290,17 +196,10 @@ def generate_embeddings_for_chunks(
 
         for emb_model in embedding_models:
             try:
-                try:
-                    res = client.models.embed_content(
-                        model=emb_model,
-                        contents=batch,
-                        config=types.EmbedContentConfig(output_dimensionality=768)
-                    )
-                except Exception:
-                    res = client.models.embed_content(
-                        model=emb_model,
-                        contents=batch
-                    )
+                res = client.models.embed_content(
+                    model=emb_model,
+                    contents=batch
+                )
 
                 if hasattr(res, "embeddings") and res.embeddings:
                     batch_embeddings = []
@@ -412,10 +311,11 @@ def extract_course_graph_from_multiple_pdfs(
 
         response = None
         last_error = None
-        max_retries = 3
-        backoff_factor = 2  # 2s, 4s, 8s
+        max_retries = 2
 
         for model_name in candidate_models:
+            if not model_name:
+                continue
             success = False
             for attempt in range(1, max_retries + 1):
                 try:
@@ -436,24 +336,8 @@ def extract_course_graph_from_multiple_pdfs(
                         break
                 except APIError as api_err:
                     last_error = api_err
-                    if api_err.code in (503, 404) or "UNAVAILABLE" in str(api_err) or "NOT_FOUND" in str(api_err):
-                        if attempt < max_retries and api_err.code != 404:
-                            sleep_time = backoff_factor ** attempt
-                            logger.warning(
-                                f"Model '{model_name}' returned error {api_err.code}. "
-                                f"Retrying in {sleep_time} seconds..."
-                            )
-                            time.sleep(sleep_time)
-                            continue
-                        else:
-                            logger.warning(
-                                f"Model '{model_name}' failed or deprecated (404/503). "
-                                f"Switching to next candidate model."
-                            )
-                            break
-                    else:
-                        logger.warning(f"API Error with model '{model_name}': {str(api_err)}")
-                        break
+                    logger.warning(f"API Error with model '{model_name}': {str(api_err)}")
+                    break
                 except Exception as e:
                     logger.warning(f"Generation attempt with model '{model_name}' failed: {str(e)}")
                     last_error = e
@@ -474,7 +358,6 @@ def extract_course_graph_from_multiple_pdfs(
             f"Tokens: Prompt={prompt_tokens}, Completion={completion_tokens}"
         )
 
-        # Safe JSON parsing with auto-repair fallback for truncated responses
         response_text = response.text.strip()
         if response_text.startswith("```json"):
             response_text = response_text[7:]
@@ -490,7 +373,6 @@ def extract_course_graph_from_multiple_pdfs(
             if fixed_text.endswith(','):
                 fixed_text = fixed_text[:-1]
             
-            # Automatically close any unclosed braces/brackets due to token ceiling cutoff
             open_braces = fixed_text.count('{') - fixed_text.count('}')
             open_brackets = fixed_text.count('[') - fixed_text.count(']')
             fixed_text += '}' * max(0, open_braces) + ']' * max(0, open_brackets)
