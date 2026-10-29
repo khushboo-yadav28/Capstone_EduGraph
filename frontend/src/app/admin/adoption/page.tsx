@@ -19,7 +19,11 @@ import {
   CheckCircle2,
   RefreshCw,
   Clock,
-  ChevronDown
+  ChevronDown,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Eye
 } from 'lucide-react';
 import { 
   api, 
@@ -39,14 +43,6 @@ export interface AdoptionCourseItem {
   completion_rate: number;
 }
 
-interface FilterMetadata {
-  preset: string;
-  filter_start?: string | null;
-  filter_end?: string | null;
-  category_name: string;
-  available_categories: string[];
-}
-
 export default function AdminAdoptionPage() {
   const router = useRouter();
   
@@ -63,6 +59,11 @@ export default function AdminAdoptionPage() {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [appliedCustomDates, setAppliedCustomDates] = useState<{ start: string; end: string } | null>(null);
+
+  // Export & Report Preview States
+  const [exportingFormat, setExportingFormat] = useState<'excel' | 'pdf' | null>(null);
+  const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
+  const [pdfPreviewBlobUrl, setPdfPreviewBlobUrl] = useState<string | null>(null);
 
   // Graduates Drill-Down Modal State
   const [isGraduatesModalOpen, setIsGraduatesModalOpen] = useState(false);
@@ -212,6 +213,72 @@ export default function AdminAdoptionPage() {
     datePreset !== 'all' || 
     appliedCustomDates !== null;
 
+  // Export Handler (Excel .xlsx & PDF .pdf)
+  const handleExport = async (format: 'excel' | 'pdf', viewInline = false) => {
+    try {
+      setExportingFormat(format);
+      const params: Record<string, string> = {};
+      
+      if (datePreset !== 'custom') {
+        params.preset = datePreset;
+      } else if (appliedCustomDates?.start || appliedCustomDates?.end) {
+        if (appliedCustomDates.start) params.start_date = appliedCustomDates.start;
+        if (appliedCustomDates.end) params.end_date = appliedCustomDates.end;
+      }
+      
+      if (categoryFilter !== 'all') {
+        params.category_name = categoryFilter;
+      }
+      
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
+
+      if (viewInline) {
+        params.inline = 'true';
+      }
+
+      const endpoint = format === 'excel'
+        ? '/courses/admin/adoption/export/excel'
+        : '/courses/admin/adoption/export/pdf';
+
+      const res = await api.get(endpoint, {
+        params,
+        responseType: 'blob',
+      });
+
+      const blobType = format === 'excel'
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'application/pdf';
+
+      const blob = new Blob([res.data], { type: blobType });
+      const url = window.URL.createObjectURL(blob);
+
+      if (viewInline && format === 'pdf') {
+        if (pdfPreviewBlobUrl) {
+          window.URL.revokeObjectURL(pdfPreviewBlobUrl);
+        }
+        setPdfPreviewBlobUrl(url);
+        setIsPdfPreviewOpen(true);
+      } else {
+        const link = document.createElement('a');
+        link.href = url;
+        const dateTag = new Date().toISOString().split('T')[0];
+        link.download = format === 'excel'
+          ? `EduGraph_Course_Adoption_Report_${dateTag}.xlsx`
+          : `EduGraph_Course_Adoption_Report_${dateTag}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => window.URL.revokeObjectURL(url), 10000);
+      }
+    } catch (err) {
+      console.error(`Failed to export ${format} report:`, err);
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
   // Fetch Graduates drill-down details for a specific course
   const fetchGraduates = useCallback(async (courseId: string, preset?: string, start?: string, end?: string) => {
     try {
@@ -290,21 +357,71 @@ export default function AdminAdoptionPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* Action Buttons: Export PDF/Excel, Refresh, and Dashboard Link */}
+          <div className="flex items-center gap-2.5">
+            
+            {/* Download Excel Button */}
+            <button
+              onClick={() => handleExport('excel')}
+              disabled={exportingFormat !== null}
+              className="px-3.5 py-2 bg-white border border-[#bce8c9] text-[#2e5a44] rounded-xl text-xs font-bold hover:bg-[#d3efdc] transition flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+              title="Download filtered adoption metrics as an Excel (.xlsx) spreadsheet"
+            >
+              {exportingFormat === 'excel' ? (
+                <Loader2 size={13} className="animate-spin text-[#2e5a44]" />
+              ) : (
+                <FileSpreadsheet size={14} className="text-[#2e5a44]" />
+              )}
+              <span className="hidden sm:inline">Download</span>
+              <span>Excel (.xlsx)</span>
+            </button>
+
+            {/* Download PDF Button */}
+            <button
+              onClick={() => handleExport('pdf')}
+              disabled={exportingFormat !== null}
+              className="px-3.5 py-2 bg-[#112217] text-white rounded-xl text-xs font-bold hover:bg-[#2e5a44] transition flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+              title="Download formatted institutional PDF report"
+            >
+              {exportingFormat === 'pdf' ? (
+                <Loader2 size={13} className="animate-spin text-[#d3efdc]" />
+              ) : (
+                <Download size={14} className="text-[#d3efdc]" />
+              )}
+              <span className="hidden sm:inline">Download</span>
+              <span>PDF (.pdf)</span>
+            </button>
+
+            {/* View PDF Preview Button */}
+            <button
+              onClick={() => handleExport('pdf', true)}
+              disabled={exportingFormat !== null}
+              className="px-3 py-2 bg-[#d3efdc] text-[#112217] border border-[#bce8c9] rounded-xl text-xs font-bold hover:bg-[#bce8c9] transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Preview generated PDF report in-app"
+            >
+              <Eye size={13} className="text-[#2e5a44]" />
+              <span>View PDF</span>
+            </button>
+
+            <div className="h-6 w-[1px] bg-[#e2eae4] mx-0.5 hidden sm:block" />
+
+            {/* Refresh Button */}
             <button
               onClick={() => fetchAdoptionMetrics(true)}
               disabled={refreshing}
-              className="px-4 py-2 bg-[#f4f7f4] border border-[#e2eae4] text-[#2e5a44] rounded-xl text-xs font-bold hover:bg-[#d3efdc]/40 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              className="px-3 py-2 bg-[#f4f7f4] border border-[#e2eae4] text-[#2e5a44] rounded-xl text-xs font-bold hover:bg-[#d3efdc]/40 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               title="Refresh Analytics Data"
             >
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-              <span>Refresh</span>
+              <span className="hidden md:inline">Refresh</span>
             </button>
+
+            {/* Dashboard Redirect */}
             <button
               onClick={() => router.push('/admin/dashboard')}
-              className="px-4 py-2 bg-[#112217] text-white rounded-xl text-xs font-bold hover:bg-[#2e5a44] transition shadow-sm cursor-pointer"
+              className="px-3.5 py-2 bg-[#f4f7f4] border border-[#e2eae4] text-[#112217] rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
             >
-              Back to Dashboard
+              Dashboard
             </button>
           </div>
         </header>
@@ -412,7 +529,7 @@ export default function AdminAdoptionPage() {
           {/* Multiple Advanced Filters Toolbar */}
           <div className="bg-white border border-[#e2eae4] rounded-[28px] p-6 shadow-sm space-y-4">
             
-            {/* Top row: Instant Search & Category Filter */}
+            {/* Top row: Instant Search, Category Filter, and Export Action Chips */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               
               {/* Instant Search Bar */}
@@ -457,16 +574,38 @@ export default function AdminAdoptionPage() {
                 </div>
               </div>
 
-              {/* Reset All Filters Button */}
-              {isAnyFilterActive && (
+              {/* Quick Export Chips & Reset Button */}
+              <div className="flex items-center gap-2 shrink-0">
                 <button
-                  onClick={handleResetFilters}
-                  className="px-3.5 py-2.5 bg-[#f4f7f4] border border-[#bce8c9] text-[#2e5a44] rounded-2xl text-xs font-bold hover:bg-[#d3efdc] transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  onClick={() => handleExport('excel')}
+                  disabled={exportingFormat !== null}
+                  className="px-3 py-2.5 bg-[#f4f7f4] border border-[#bce8c9] text-[#2e5a44] rounded-2xl text-xs font-bold hover:bg-[#d3efdc] transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                  title="Export active filtered view to Excel (.xlsx)"
                 >
-                  <X size={13} />
-                  <span>Reset Filters</span>
+                  <FileSpreadsheet size={13} />
+                  <span>.xlsx</span>
                 </button>
-              )}
+
+                <button
+                  onClick={() => handleExport('pdf')}
+                  disabled={exportingFormat !== null}
+                  className="px-3 py-2.5 bg-[#f4f7f4] border border-[#e2eae4] text-[#112217] rounded-2xl text-xs font-bold hover:bg-[#112217] hover:text-white transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                  title="Export active filtered view to PDF (.pdf)"
+                >
+                  <FileText size={13} />
+                  <span>.pdf</span>
+                </button>
+
+                {isAnyFilterActive && (
+                  <button
+                    onClick={handleResetFilters}
+                    className="px-3.5 py-2.5 bg-[#f4f7f4] border border-[#bce8c9] text-[#2e5a44] rounded-2xl text-xs font-bold hover:bg-[#d3efdc] transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <X size={13} />
+                    <span>Reset</span>
+                  </button>
+                )}
+              </div>
 
             </div>
 
@@ -932,6 +1071,71 @@ export default function AdminAdoptionPage() {
                 className="px-5 py-2 bg-[#112217] text-white rounded-xl text-xs font-bold hover:bg-[#2e5a44] transition shadow cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* PDF Report In-App Preview Modal */}
+      {isPdfPreviewOpen && pdfPreviewBlobUrl && (
+        <div className="fixed inset-0 z-50 bg-[#112217]/75 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-white border border-[#e2eae4] rounded-[32px] w-full max-w-5xl h-[90vh] shadow-2xl flex flex-col overflow-hidden my-auto">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-[#e2eae4] flex items-center justify-between bg-[#f4f7f4] shrink-0">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 bg-[#d3efdc] text-[#112217] border border-[#bce8c9] rounded-md text-[9px] font-black uppercase tracking-wider">
+                    Institutional Report Preview
+                  </span>
+                  <span className="text-xs font-bold text-[#4a6b5d]">
+                    Filtered Window: {datePreset === 'all' ? 'All Time' : datePreset.replace('_', ' ')}
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-[#112217]">
+                  Platform Course Adoption &amp; Popularity Report (.pdf)
+                </h3>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleExport('pdf')}
+                  className="px-3.5 py-1.5 bg-[#112217] text-white rounded-xl text-xs font-bold hover:bg-[#2e5a44] transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Download size={13} className="text-[#d3efdc]" />
+                  <span>Download PDF</span>
+                </button>
+                <button
+                  onClick={() => setIsPdfPreviewOpen(false)}
+                  className="w-9 h-9 rounded-xl bg-white border border-[#e2eae4] flex items-center justify-center text-[#4a6b5d] hover:text-[#112217] hover:bg-slate-100 transition cursor-pointer"
+                  title="Close preview"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body: Embedded PDF iframe */}
+            <div className="flex-1 p-4 bg-[#f4f7f4] overflow-hidden">
+              <iframe
+                src={pdfPreviewBlobUrl}
+                className="w-full h-full rounded-2xl border border-[#e2eae4] bg-white shadow-inner"
+                title="Course Adoption PDF Preview"
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-[#e2eae4] bg-white flex items-center justify-between shrink-0">
+              <span className="text-xs text-[#4a6b5d] font-semibold">
+                EduGraph LMS • Official Course Adoption Analytics Document
+              </span>
+              <button
+                onClick={() => setIsPdfPreviewOpen(false)}
+                className="px-5 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#112217] rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Close Preview
               </button>
             </div>
 

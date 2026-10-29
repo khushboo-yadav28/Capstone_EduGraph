@@ -10,7 +10,10 @@ from typing import Any, Dict, List, Optional, Set
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status, Response
+import io
+import zipfile
+import pymupdf
 
 from fastapi.responses import FileResponse
 
@@ -489,6 +492,414 @@ def get_admin_course_adoption_metrics(
         },
         "courses": course_items
     }
+
+
+def _generate_adoption_excel(filter_info: Dict[str, Any], kpis: Dict[str, Any], courses: List[Dict[str, Any]]) -> bytes:
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"""
+
+    rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+
+    wb_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+
+    workbook = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Course Adoption Report" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+
+    styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="6">
+    <font><name val="Calibri"/><sz val="11"/></font>
+    <font><b/><color rgb="FF112217"/><name val="Calibri"/><sz val="15"/></font>
+    <font><i/><color rgb="FF4A6B5D"/><name val="Calibri"/><sz val="10"/></font>
+    <font><b/><color rgb="FF112217"/><name val="Calibri"/><sz val="10"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><name val="Calibri"/><sz val="11"/></font>
+    <font><color rgb="FF112217"/><name val="Calibri"/><sz val="10"/></font>
+  </fonts>
+  <fills count="5">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF112217"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFD3EFDC"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF4F7F4"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/></border>
+    <border>
+      <left style="thin"><color rgb="FFE2EAE4"/></left>
+      <right style="thin"><color rgb="FFE2EAE4"/></right>
+      <top style="thin"><color rgb="FFE2EAE4"/></top>
+      <bottom style="thin"><color rgb="FFE2EAE4"/></bottom>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="8">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+    <xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+    <xf numFmtId="0" fontId="4" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">
+      <alignment horizontal="center" vertical="center"/>
+    </xf>
+    <xf numFmtId="0" fontId="5" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
+    <xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">
+      <alignment horizontal="center" vertical="center"/>
+    </xf>
+    <xf numFmtId="0" fontId="5" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+  </cellXfs>
+</styleSheet>"""
+
+    rows_xml = []
+    rows_xml.append('<row r="1"><c r="A1" s="1" t="inlineStr"><is><t>EduGraph LMS - Platform Course Adoption &amp; Popularity Report</t></is></c></row>')
+    
+    meta_desc = f"Generated: {filter_info.get('timestamp', '')} | Filter Window: {filter_info.get('window', 'All Time')} | Category: {filter_info.get('category', 'All Categories')}"
+    rows_xml.append(f'<row r="2"><c r="A2" s="2" t="inlineStr"><is><t>{meta_desc}</t></is></c></row>')
+
+    rows_xml.append(f"""<row r="4">
+      <c r="A4" s="3" t="inlineStr"><is><t>Total Active Learners: {kpis.get("total_active_learners", 0)}</t></is></c>
+      <c r="C4" s="3" t="inlineStr"><is><t>Average Completion Rate: {kpis.get("avg_completion_rate", 0)}%</t></is></c>
+      <c r="E4" s="3" t="inlineStr"><is><t>Top Performing Category: {kpis.get("top_performing_category", "N/A")}</t></is></c>
+      <c r="G4" s="3" t="inlineStr"><is><t>Total Enrolled Registrations: {kpis.get("total_enrolled_count", 0)}</t></is></c>
+    </row>""")
+
+    rows_xml.append("""<row r="6">
+      <c r="A6" s="4" t="inlineStr"><is><t>Rank</t></is></c>
+      <c r="B6" s="4" t="inlineStr"><is><t>Course Title</t></is></c>
+      <c r="C6" s="4" t="inlineStr"><is><t>Instructor</t></is></c>
+      <c r="D6" s="4" t="inlineStr"><is><t>Category</t></is></c>
+      <c r="E6" s="4" t="inlineStr"><is><t>Total Enrolled</t></is></c>
+      <c r="F6" s="4" t="inlineStr"><is><t>Active Learners</t></is></c>
+      <c r="G6" s="4" t="inlineStr"><is><t>Completions</t></is></c>
+      <c r="H6" s="4" t="inlineStr"><is><t>Completion Rate</t></is></c>
+    </row>""")
+
+    row_idx = 7
+    for i, c in enumerate(courses):
+        bg_s = 7 if i % 2 == 1 else 5
+        rank = i + 1
+        title_esc = str(c.get('title', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        inst_esc = str(c.get('instructor_name', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        cat_esc = str(c.get('category_name', '')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        total_enr = c.get('total_enrollments', 0)
+        active_cnt = c.get('active_students_count', 0)
+        comp_cnt = c.get('completed_students_count', 0)
+        rate = c.get('completion_rate', 0.0)
+
+        rows_xml.append(f"""<row r="{row_idx}">
+          <c r="A{row_idx}" s="6"><v>{rank}</v></c>
+          <c r="B{row_idx}" s="{bg_s}" t="inlineStr"><is><t>{title_esc}</t></is></c>
+          <c r="C{row_idx}" s="{bg_s}" t="inlineStr"><is><t>{inst_esc}</t></is></c>
+          <c r="D{row_idx}" s="{bg_s}" t="inlineStr"><is><t>{cat_esc}</t></is></c>
+          <c r="E{row_idx}" s="{bg_s}"><v>{total_enr}</v></c>
+          <c r="F{row_idx}" s="{bg_s}"><v>{active_cnt}</v></c>
+          <c r="G{row_idx}" s="{bg_s}"><v>{comp_cnt}</v></c>
+          <c r="H{row_idx}" s="{bg_s}" t="inlineStr"><is><t>{rate}%</t></is></c>
+        </row>""")
+        row_idx += 1
+
+    sheet = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cols>
+    <col min="1" max="1" width="8" customWidth="1"/>
+    <col min="2" max="2" width="34" customWidth="1"/>
+    <col min="3" max="3" width="24" customWidth="1"/>
+    <col min="4" max="4" width="22" customWidth="1"/>
+    <col min="5" max="5" width="16" customWidth="1"/>
+    <col min="6" max="6" width="16" customWidth="1"/>
+    <col min="7" max="7" width="16" customWidth="1"/>
+    <col min="8" max="8" width="18" customWidth="1"/>
+  </cols>
+  <sheetData>
+    {''.join(rows_xml)}
+  </sheetData>
+</worksheet>"""
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', rels)
+        zf.writestr('xl/_rels/workbook.xml.rels', wb_rels)
+        zf.writestr('xl/workbook.xml', workbook)
+        zf.writestr('xl/styles.xml', styles)
+        zf.writestr('xl/worksheets/sheet1.xml', sheet)
+
+    return buf.getvalue()
+
+
+def _generate_adoption_pdf(filter_info: Dict[str, Any], kpis: Dict[str, Any], courses: List[Dict[str, Any]]) -> bytes:
+    doc = pymupdf.open()
+    page_width = 842.0
+    page_height = 595.0
+
+    C_DARK = (17/255, 34/255, 23/255)       # #112217
+    C_MINT = (211/255, 239/255, 220/255)    # #d3efdc
+    C_MINT_BORDER = (188/255, 232/255, 201/255) # #bce8c9
+    C_BG_ROW = (244/255, 247/255, 244/255)  # #f4f7f4
+    C_BORDER = (226/255, 234/255, 228/255)  # #e2eae4
+    C_WHITE = (1.0, 1.0, 1.0)
+    C_MUTED = (74/255, 107/255, 93/255)     # #4a6b5d
+
+    margin_x = 36.0
+    usable_width = page_width - 2 * margin_x
+
+    def create_page():
+        page = doc.new_page(width=page_width, height=page_height)
+        page.draw_rect(pymupdf.Rect(0, 0, page_width, 56), color=None, fill=C_DARK)
+        page.insert_text((margin_x, 24), "EDUGRAPH LMS • INSTITUTIONAL COURSEWARE INTELLIGENCE SUITE", fontsize=9, fontname="helv", color=C_MINT)
+        page.insert_text((margin_x, 44), "Platform Course Adoption & Popularity Analytics Report", fontsize=15, fontname="helv", color=C_WHITE)
+        
+        page.draw_line(pymupdf.Point(margin_x, page_height - 28), pymupdf.Point(page_width - margin_x, page_height - 28), color=C_BORDER, width=0.8)
+        page.insert_text((margin_x, page_height - 14), "GLS University • Faculty of Computer Applications & IT • EduGraph Adaptive Courseware System", fontsize=8, fontname="helv", color=C_MUTED)
+        page.insert_text((page_width - margin_x - 70, page_height - 14), f"Page {len(doc)}", fontsize=8, fontname="helv", color=C_MUTED)
+        return page
+
+    current_page = create_page()
+    cursor_y = 70.0
+
+    meta_rect = pymupdf.Rect(margin_x, cursor_y, page_width - margin_x, cursor_y + 26)
+    current_page.draw_rect(meta_rect, color=C_MINT_BORDER, fill=C_MINT)
+    meta_str = f"Generated: {filter_info.get('timestamp', 'N/A')}  |  Enrolled Date Filter: {filter_info.get('window', 'All Time')}  |  Category: {filter_info.get('category', 'All Categories')}  |  Total Matching Courses: {len(courses)}"
+    current_page.insert_text((margin_x + 12, cursor_y + 17), meta_str, fontsize=8.5, fontname="helv", color=C_DARK)
+    cursor_y += 34.0
+
+    kpi_w = (usable_width - 3 * 10) / 4.0
+    kpi_h = 44.0
+    kpi_items = [
+        ("TOTAL ACTIVE LEARNERS", str(kpis.get("total_active_learners", 0)), "Actively progressing students"),
+        ("AVG COMPLETION RATE", f"{kpis.get('avg_completion_rate', 0)}%", "Across filtered courses"),
+        ("TOP PERFORMING CATEGORY", str(kpis.get("top_performing_category", "N/A"))[:20], "Leading student adoption"),
+        ("TOTAL ENROLLMENTS", str(kpis.get("total_enrolled_count", 0)), f"Across {len(courses)} courses")
+    ]
+
+    for idx, (label, val, sub) in enumerate(kpi_items):
+        kx = margin_x + idx * (kpi_w + 10)
+        card_rect = pymupdf.Rect(kx, cursor_y, kx + kpi_w, cursor_y + kpi_h)
+        current_page.draw_rect(card_rect, color=C_BORDER, fill=C_WHITE)
+        current_page.insert_text((kx + 8, cursor_y + 13), label, fontsize=6.5, fontname="helv", color=C_MUTED)
+        current_page.insert_text((kx + 8, cursor_y + 28), val, fontsize=12, fontname="helv", color=C_DARK)
+        current_page.insert_text((kx + 8, cursor_y + 39), sub, fontsize=6.5, fontname="helv", color=C_MUTED)
+
+    cursor_y += kpi_h + 16.0
+
+    cols = [
+        ("Rank", 36.0, "center"),
+        ("Course Title", 210.0, "left"),
+        ("Instructor", 140.0, "left"),
+        ("Category", 130.0, "left"),
+        ("Total Enrolled", 80.0, "center"),
+        ("Active", 60.0, "center"),
+        ("Completions", 65.0, "center"),
+        ("Completion Rate", 85.0, "center")
+    ]
+    total_col_w = sum(c[1] for c in cols)
+    ratio = usable_width / total_col_w
+    cols = [(c[0], c[1] * ratio, c[2]) for c in cols]
+
+    def draw_table_header(page, y):
+        header_rect = pymupdf.Rect(margin_x, y, page_width - margin_x, y + 22)
+        page.draw_rect(header_rect, color=None, fill=C_DARK)
+        x = margin_x
+        for title, w, align in cols:
+            if align == "center":
+                tw = pymupdf.get_text_length(title, fontname="helv", fontsize=8)
+                tx = x + (w - tw) / 2.0
+            else:
+                tx = x + 6.0
+            page.insert_text((tx, y + 14), title, fontsize=8, fontname="helv", color=C_WHITE)
+            x += w
+        return y + 22.0
+
+    cursor_y = draw_table_header(current_page, cursor_y)
+    row_height = 20.0
+
+    for idx, c in enumerate(courses):
+        if cursor_y + row_height > page_height - 45.0:
+            current_page = create_page()
+            cursor_y = 66.0
+            cursor_y = draw_table_header(current_page, cursor_y)
+
+        row_fill = C_BG_ROW if idx % 2 == 1 else C_WHITE
+        row_rect = pymupdf.Rect(margin_x, cursor_y, page_width - margin_x, cursor_y + row_height)
+        current_page.draw_rect(row_rect, color=C_BORDER, fill=row_fill)
+
+        row_data = [
+            f"#{idx + 1}",
+            str(c.get("title", ""))[:38],
+            str(c.get("instructor_name", ""))[:25],
+            str(c.get("category_name", ""))[:22],
+            str(c.get("total_enrollments", 0)),
+            str(c.get("active_students_count", 0)),
+            str(c.get("completed_students_count", 0)),
+            f"{c.get('completion_rate', 0)}%"
+        ]
+
+        x = margin_x
+        for cell_idx, ((col_name, w, align), text) in enumerate(zip(cols, row_data)):
+            font_size = 7.5
+            font_color = C_DARK if cell_idx in [0, 1, 4, 7] else C_MUTED
+            if align == "center":
+                tw = pymupdf.get_text_length(text, fontname="helv", fontsize=font_size)
+                tx = x + (w - tw) / 2.0
+            else:
+                tx = x + 6.0
+            current_page.insert_text((tx, cursor_y + 13), text, fontsize=font_size, fontname="helv", color=font_color)
+            x += w
+
+        cursor_y += row_height
+
+    return doc.tobytes()
+
+
+@router.get("/admin/adoption/export/excel")
+def export_admin_course_adoption_excel(
+    preset: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category_id: Optional[str] = None,
+    category_name: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN]))
+):
+    """
+    Exports filtered course adoption & popularity metrics as an Excel (.xlsx) spreadsheet
+    matching the institutional dark green and mint theme.
+    """
+    data = get_admin_course_adoption_metrics(
+        preset=preset,
+        start_date=start_date,
+        end_date=end_date,
+        category_id=category_id,
+        category_name=category_name,
+        db=db,
+        current_user=current_user
+    )
+
+    courses = data["courses"]
+    if search and isinstance(search, str) and search.strip():
+        q = search.strip().lower()
+        courses = [
+            c for c in courses 
+            if q in c["title"].lower() or q in c["instructor_name"].lower() or q in c["category_name"].lower()
+        ]
+
+    window_label = "All Time"
+    if preset == "today":
+        window_label = "Today"
+    elif preset == "7_days":
+        window_label = "Last 7 Days"
+    elif preset == "30_days":
+        window_label = "Last 30 Days"
+    elif start_date or end_date:
+        window_label = f"{start_date or 'Start'} to {end_date or 'Present'}"
+
+    cat_label = category_name if category_name and category_name.lower() != "all" else "All Categories"
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    filter_info = {
+        "timestamp": now_str,
+        "window": window_label,
+        "category": cat_label,
+        "search": search or ""
+    }
+
+    excel_bytes = _generate_adoption_excel(filter_info, data["kpis"], courses)
+    date_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = f"EduGraph_Course_Adoption_Report_{date_tag}.xlsx"
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@router.get("/admin/adoption/export/pdf")
+def export_admin_course_adoption_pdf(
+    preset: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category_id: Optional[str] = None,
+    category_name: Optional[str] = None,
+    search: Optional[str] = None,
+    inline: Optional[bool] = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN]))
+):
+    """
+    Exports filtered course adoption & popularity metrics as a PDF document
+    with institutional styling, header banners, KPI summaries, and tabular layout.
+    """
+    data = get_admin_course_adoption_metrics(
+        preset=preset,
+        start_date=start_date,
+        end_date=end_date,
+        category_id=category_id,
+        category_name=category_name,
+        db=db,
+        current_user=current_user
+    )
+
+    courses = data["courses"]
+    if search and isinstance(search, str) and search.strip():
+        q = search.strip().lower()
+        courses = [
+            c for c in courses 
+            if q in c["title"].lower() or q in c["instructor_name"].lower() or q in c["category_name"].lower()
+        ]
+
+    window_label = "All Time"
+    if preset == "today":
+        window_label = "Today"
+    elif preset == "7_days":
+        window_label = "Last 7 Days"
+    elif preset == "30_days":
+        window_label = "Last 30 Days"
+    elif start_date or end_date:
+        window_label = f"{start_date or 'Start'} to {end_date or 'Present'}"
+
+    cat_label = category_name if category_name and category_name.lower() != "all" else "All Categories"
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    filter_info = {
+        "timestamp": now_str,
+        "window": window_label,
+        "category": cat_label,
+        "search": search or ""
+    }
+
+    pdf_bytes = _generate_adoption_pdf(filter_info, data["kpis"], courses)
+    date_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = f"EduGraph_Course_Adoption_Report_{date_tag}.pdf"
+    disposition = "inline" if inline else "attachment"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"'
+        }
+    )
 
 
 @router.get("/admin/completions")
