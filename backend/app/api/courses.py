@@ -491,6 +491,201 @@ def get_admin_course_adoption_metrics(
     }
 
 
+@router.get("/admin/completions")
+def get_admin_course_completions_metrics(
+    preset: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    category_id: Optional[str] = None,
+    category_name: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles([UserRole.ADMIN]))
+):
+    """
+    Platform-Wide Course Completions & Certified Graduates Metrics with multi-filtering capabilities:
+    - Badge Issue Date Filter: All Time, Same Day, Within 1 Day, 1 Week, 1 Month, or Custom Date Range
+    - Category-Wise Filter: taxonomy categories
+    - Returns courses ranked by completion rate and graduates count, with student details and platform KPIs.
+    """
+    now = datetime.now(timezone.utc)
+    filter_start = None
+    filter_end = None
+
+    if isinstance(preset, str):
+        if preset == "same_day":
+            filter_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif preset == "within_1_day":
+            filter_start = now - timedelta(days=1)
+        elif preset == "1_week":
+            filter_start = now - timedelta(days=7)
+        elif preset == "1_month":
+            filter_start = now - timedelta(days=30)
+
+    if isinstance(start_date, str) and start_date.strip():
+        try:
+            cleaned = start_date.strip()
+            if len(cleaned) == 10:
+                filter_start = datetime.strptime(cleaned, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            else:
+                filter_start = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    if isinstance(end_date, str) and end_date.strip():
+        try:
+            cleaned = end_date.strip()
+            if len(cleaned) == 10:
+                filter_end = datetime.strptime(cleaned, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            else:
+                filter_end = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    courses_query = (
+        db.query(Course)
+        .options(joinedload(Course.instructor), joinedload(Course.category))
+        .filter(Course.status == CourseStatus.PUBLISHED)
+    )
+
+    if category_id and isinstance(category_id, (str, UUID)):
+        courses_query = courses_query.filter(Course.category_id == category_id)
+
+    all_published = courses_query.all()
+
+    # Extract all distinct category names across all published courses
+    all_cat_names = sorted(list({
+        c.category.name for c in all_published if c.category and c.category.name
+    }))
+
+    # If category_name filter is applied and not 'all'
+    if isinstance(category_name, str) and category_name.strip() and category_name.lower() != "all":
+        all_published = [
+            c for c in all_published 
+            if c.category and c.category.name.lower() == category_name.strip().lower()
+        ]
+
+    course_items = []
+    total_certified_graduates = 0
+    total_enrollments_sum = 0
+    category_graduates_map: Dict[str, int] = {}
+
+    for c in all_published:
+        total_enrolled = (
+            db.query(func.count(UserCourseEnrollment.id))
+            .filter(UserCourseEnrollment.course_id == c.id)
+            .scalar() or 0
+        )
+
+        completed_enrollments = (
+            db.query(UserCourseEnrollment)
+            .options(
+                joinedload(UserCourseEnrollment.student).joinedload(User.student_profile),
+                joinedload(UserCourseEnrollment.badge)
+            )
+            .filter(
+                UserCourseEnrollment.course_id == c.id,
+                (UserCourseEnrollment.status == EnrollmentStatus.COMPLETED) | (UserCourseEnrollment.progress_percentage >= 100.0)
+            )
+            .all()
+        )
+
+        course_graduates = []
+        for enr in completed_enrollments:
+            student = enr.student
+            badge = enr.badge
+            prof = student.student_profile if student else None
+
+            issue_date = None
+            if badge and badge.issued_at:
+                issue_date = badge.issued_at
+            elif enr.completed_at:
+                issue_date = enr.completed_at
+            else:
+                issue_date = enr.enrolled_at or now
+
+            if issue_date and issue_date.tzinfo is None:
+                issue_date = issue_date.replace(tzinfo=timezone.utc)
+
+            if filter_start and issue_date and issue_date < filter_start:
+                continue
+            if filter_end and issue_date and issue_date > filter_end:
+                continue
+
+            course_graduates.append({
+                "student_id": str(student.id) if student else "",
+                "student_name": student.full_name if student else "Unknown Student",
+                "email": student.email if student else "N/A",
+                "enrollment_number": prof.enrollment_number if prof and prof.enrollment_number else "N/A",
+                "department": prof.department if prof and prof.department else "N/A",
+                "program": prof.program if prof and prof.program else "N/A",
+                "semester": prof.semester if prof and prof.semester else "N/A",
+                "badge_title": badge.badge_title if badge else f"Master of {c.title}",
+                "badge_image_url": badge.badge_image_url if badge else "/default-badge.png",
+                "badge_issued_at": issue_date.isoformat() if issue_date else None,
+                "progress_percentage": enr.progress_percentage or 100.0,
+                "status": enr.status.value if hasattr(enr.status, "value") else str(enr.status)
+            })
+
+        course_graduates.sort(key=lambda x: x["badge_issued_at"] or "", reverse=True)
+        completed_count = len(course_graduates)
+        completion_rate = round((completed_count / total_enrolled) * 100.0, 1) if total_enrolled > 0 else 0.0
+
+        cat_name = c.category.name if c.category else "General"
+        category_graduates_map[cat_name] = category_graduates_map.get(cat_name, 0) + completed_count
+
+        total_certified_graduates += completed_count
+        total_enrollments_sum += total_enrolled
+
+        course_items.append({
+            "id": str(c.id),
+            "title": c.title,
+            "description": c.description or "",
+            "instructor_name": c.instructor.full_name if c.instructor else "Platform Instructor",
+            "category_name": cat_name,
+            "total_enrollments": total_enrolled,
+            "completed_students_count": completed_count,
+            "completion_rate": completion_rate,
+            "graduates": course_graduates
+        })
+
+    course_items.sort(key=lambda x: (x["completed_students_count"], x["completion_rate"]), reverse=True)
+
+    top_performing_category = "N/A"
+    if category_graduates_map:
+        sorted_cats = sorted(category_graduates_map.items(), key=lambda x: x[1], reverse=True)
+        top_performing_category = sorted_cats[0][0]
+
+    top_course_title = "N/A"
+    if course_items and course_items[0]["completed_students_count"] > 0:
+        top_course_title = course_items[0]["title"]
+    elif course_items:
+        top_course_title = course_items[0]["title"]
+
+    overall_avg_completion = (
+        round((total_certified_graduates / total_enrollments_sum) * 100.0, 1)
+        if total_enrollments_sum > 0 else 0.0
+    )
+
+    return {
+        "filter_metadata": {
+            "preset": preset or "all",
+            "filter_start": filter_start.isoformat() if filter_start else None,
+            "filter_end": filter_end.isoformat() if filter_end else None,
+            "category_name": category_name or "all",
+            "available_categories": all_cat_names
+        },
+        "kpis": {
+            "total_certified_graduates": total_certified_graduates,
+            "avg_completion_rate": overall_avg_completion,
+            "top_course_title": top_course_title,
+            "top_performing_category": top_performing_category,
+            "total_courses_count": len(course_items),
+            "total_enrollments_sum": total_enrollments_sum
+        },
+        "courses": course_items
+    }
+
+
 # --- Course Lifecycle Endpoints ---
 
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)

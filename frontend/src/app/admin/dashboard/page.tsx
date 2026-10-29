@@ -474,15 +474,11 @@ export default function AdminDashboard() {
               <div className="pt-2 border-t border-[#f4f7f4] flex items-center justify-between">
                 {stats.most_completed_course ? (
                   <button
-                    onClick={() => handleOpenGraduatesModal(
-                      stats.most_completed_course?.id,
-                      stats.most_completed_course?.title,
-                      stats.most_completed_course?.instructor_name
-                    )}
+                    onClick={() => router.push('/admin/completions')}
                     className="text-xs font-black text-[#112217] hover:text-[#2e5a44] flex items-center gap-1.5 cursor-pointer bg-[#d3efdc] hover:bg-[#bce8c9] px-3.5 py-1.5 rounded-xl border border-[#bce8c9] shadow-sm transition"
                   >
-                    <Users size={14} className="text-[#2e5a44]" />
-                    <span>View Graduated Students & Issue Dates &rarr;</span>
+                    <Award size={14} className="text-[#2e5a44]" />
+                    <span>View All Platform Completions & Graduated Students &rarr;</span>
                   </button>
                 ) : (
                   <span className="text-xs text-slate-400">No completion records</span>
