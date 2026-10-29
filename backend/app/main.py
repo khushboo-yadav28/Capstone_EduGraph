@@ -16,7 +16,12 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
+            conn.execute(text("ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS score FLOAT;"))
             conn.execute(text("ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS set_number INTEGER DEFAULT 1;"))
+            conn.execute(text("ALTER TABLE student_progress ADD COLUMN IF NOT EXISTS progress_percentage FLOAT DEFAULT 0.0;"))
+            
+            # Backfill quiz_attempts.score from score_percentage if score is null
+            conn.execute(text("UPDATE quiz_attempts SET score = score_percentage WHERE score IS NULL;"))
             
             # Ensure student_profiles has program and semester columns
             conn.execute(text("ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS program VARCHAR(100);"))
@@ -69,12 +74,11 @@ app.include_router(courses.router)
 app.include_router(enrollment.router)
 
 
-@app.get("/health", tags=["Health"])
+@app.get("/", tags=["Health Check"])
+def root():
+    return {"message": "EduGraph Adaptive Learning API is running successfully."}
+
+
+@app.get("/health", tags=["Health Check"])
 def health_check():
-    return {"status": "ok"}
-
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+    return {"status": "healthy"}

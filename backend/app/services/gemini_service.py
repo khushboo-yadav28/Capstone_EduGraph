@@ -14,6 +14,8 @@ from app.core.config import (
     GEMINI_FALLBACK_MODEL,
     GEMINI_INGESTION_TEMPERATURE,
     GEMINI_INGESTION_MAX_TOKENS,
+    GEMINI_CHAT_TEMPERATURE,
+    GEMINI_CHAT_MAX_TOKENS,
 )
 from app.models.quiz import DifficultyLevel
 from app.utils.graph_layout import calculate_dag_layout
@@ -437,3 +439,103 @@ def extract_course_graph_from_pdf(
     return extract_course_graph_from_multiple_pdfs([
         {"bytes": pdf_bytes, "file_name": "syllabus.pdf", "mime_type": mime_type}
     ])
+
+# ==========================================
+# 5. AI Doubt Solver & Pedagogical Reasoning
+# ==========================================
+
+def answer_student_doubt(
+    course_title: str,
+    node_title: str,
+    node_summary: str,
+    question: str,
+    context_chunks: Optional[List[str]] = None,
+    chat_history: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """
+    Answers a student doubt in the context of a specific learning node and course material
+    using the Gemini API and RAG context chunks.
+    """
+    context_chunks = context_chunks or []
+    chat_history = chat_history or []
+
+    # Clean and truncate reference excerpts
+    cleaned_excerpts = []
+    total_length = 0
+    for chunk in context_chunks:
+        if chunk and chunk.strip():
+            cleaned = chunk.strip()
+            if total_length + len(cleaned) > 3500:
+                cleaned = cleaned[:max(200, 3500 - total_length)] + "..."
+                cleaned_excerpts.append(cleaned)
+                break
+            cleaned_excerpts.append(cleaned)
+            total_length += len(cleaned)
+
+    excerpts_text = "\n---\n".join(cleaned_excerpts) if cleaned_excerpts else "No specific textbook excerpt found."
+
+    history_lines = []
+    if chat_history:
+        for msg in chat_history[-6:]:
+            role = "Student" if msg.get("role") == "user" else "Tutor"
+            history_lines.append(f"{role}: {msg.get('content', '')}")
+    history_text = ("\nRecent Conversation History:\n" + "\n".join(history_lines)) if history_lines else ""
+
+    prompt = f"""You are EduGraph's AI Academic Tutor. Provide a clear, encouraging, and accurate explanation for the student's doubt.
+
+Course: {course_title}
+Topic / Concept: {node_title}
+
+Concept Summary:
+{node_summary}
+
+Relevant Course Material Excerpts:
+{excerpts_text}
+{history_text}
+
+Student Question:
+{question}
+
+Instructions:
+1. Provide a direct, pedagogical explanation addressing the student's question clearly.
+2. Ground your explanation in the concept topic ({node_title}) and refer to the course materials where applicable.
+3. Use formatted Markdown (bullet points, bold key terms, code examples if relevant) to make the explanation easy to read.
+4. Keep the tone helpful, professional, and clear.
+"""
+
+    if not client:
+        logger.warning("Gemini Client not initialized. Returning educational fallback answer.")
+        return (
+            f"**{node_title} — Concept Explanation:**\n\n"
+            f"{node_summary}\n\n"
+            f"Regarding your doubt (*{question}*): Focus on the core definitions above. "
+            f"Please review the linked video lecture and textbook page references for deeper insights."
+        )
+
+    candidate_models = get_candidate_generation_models()
+    for model_name in candidate_models:
+        if not model_name:
+            continue
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=GEMINI_CHAT_TEMPERATURE,
+                    max_output_tokens=GEMINI_CHAT_MAX_TOKENS,
+                )
+            )
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            logger.warning(f"Gemini doubt solver error with model '{model_name}': {str(e)}")
+            continue
+
+    # Fallback response if all API models fail
+    excerpt_quote = f"\n\n> *Reference excerpt: {cleaned_excerpts[0][:200]}...*" if cleaned_excerpts else ""
+    return (
+        f"**{node_title} — Tutor Guidance:**\n\n"
+        f"{node_summary}\n\n"
+        f"Regarding your question (*{question}*): {excerpt_quote}\n\n"
+        f"*Tip: Try breaking down this question into core sub-concepts or reviewing the assessment quiz feedback.*"
+    )

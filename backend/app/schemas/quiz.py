@@ -42,6 +42,7 @@ class QuizAttemptResponse(BaseModel):
     student_id: UUID
     node_id: UUID
     set_number: int
+    score: Optional[float] = None
     score_percentage: float = Field(..., example=100.0)
     is_passed: bool = Field(..., example=True)
     attempted_at: datetime
@@ -57,11 +58,14 @@ class StudentProgressResponse(BaseModel):
     node_id: UUID
     is_unlocked: bool
     is_completed: bool
+    progress_percentage: float = 0.0  # Granular module progress (0.0, 50.0, 100.0)
+    passed_sets_count: int = 0
     unlocked_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
 
 class QuizPublicResponse(BaseModel):
     """Public version of Quiz schema for students - hides correct answer and explanation."""
@@ -98,10 +102,12 @@ class QuestionFeedback(BaseModel):
 class BatchQuizEvaluationResponse(BaseModel):
     attempt_id: int
     set_number: int
+    score: float = 0.0  # Stored score
     score_percentage: float
     total_questions: int
     correct_answers_count: int
     is_passed: bool
-    node_fully_completed: bool  # True if both set 1 and set 2 are now passed
+    node_progress_percentage: float = 0.0  # e.g., 50.0 or 100.0
+    node_fully_completed: bool  # True if both set 1 and set 2 are passed
     unlocked_next_node_keys: List[str] = []
     feedback: List[QuestionFeedback]

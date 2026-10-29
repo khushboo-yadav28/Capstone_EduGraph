@@ -17,7 +17,7 @@ from app.schemas.enrollment import (
 )
 from app.core.security import get_current_user, require_roles
 from app.services.certificate_service import generate_course_certificate
-from app.services.enrollment_service import update_course_progress_and_badge
+from app.services.enrollment_service import update_course_progress_and_badge, sort_course_nodes
 
 router = APIRouter(prefix="/enrollments", tags=["Enrollments & Badges"])
 
@@ -77,20 +77,20 @@ def enroll_in_course(
     db.add(enrollment)
     db.flush()
 
-    # 2. Unlock Root Nodes (Nodes that have no incoming edges)
+    # 2. Initialize StudentProgress: Unlock strictly ONLY the 1st module in sequence
     all_nodes = db.query(Node).filter(Node.course_id == course.id).all()
-    target_node_keys = set(
-        edge.target_node_key for edge in db.query(Edge.target_node_key).filter(Edge.course_id == course.id).all()
-    )
+    all_edges = db.query(Edge).filter(Edge.course_id == course.id).all()
+    sorted_nodes = sort_course_nodes(all_nodes, all_edges)
 
-    for node in all_nodes:
-        is_root = node.node_key not in target_node_keys
+    for idx, node in enumerate(sorted_nodes):
+        is_first = (idx == 0)
         progress = StudentProgress(
             student_id=current_user.id,
             node_id=node.id,
-            is_unlocked=is_root,  # True if root node, False otherwise
+            is_unlocked=is_first,  # Unlock strictly ONLY the 1st module upon enrollment!
             is_completed=False,
-            unlocked_at=datetime.now(timezone.utc) if is_root else None
+            progress_percentage=0.0,
+            unlocked_at=datetime.now(timezone.utc) if is_first else None
         )
         db.add(progress)
 

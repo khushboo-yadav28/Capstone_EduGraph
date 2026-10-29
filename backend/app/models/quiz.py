@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import UUID, Column, Integer, String, Text,Float, Boolean, DateTime, ForeignKey, Enum, JSON, UniqueConstraint
+from sqlalchemy import UUID, Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Enum, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -34,24 +34,13 @@ class StudentProgress(Base):
     node_id = Column(UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     is_unlocked = Column(Boolean, default=False)
     is_completed = Column(Boolean, default=False)
+    progress_percentage = Column(Float, default=0.0, nullable=False)  # 0.0, 50.0, or 100.0 based on passed sets
     unlocked_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     student = relationship("User", back_populates="progress")
     node = relationship("Node", back_populates="student_progress")
 
-
-# class QuizAttempt(Base):
-#     __tablename__ = "quiz_attempts"
-
-#     id = Column(Integer, primary_key=True, index=True)
-#     student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-#     node_id = Column(UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
-#     score_percentage = Column(Float, nullable=False)  # e.g., 80.0
-#     is_passed = Column(Boolean, nullable=False)
-#     attempted_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-
-#     student = relationship("User", back_populates="quiz_attempts")
 
 class StudentQuizSetProgress(Base):
     """Tracks passing status for individual quiz sets (e.g. Set 1 vs Set 2) per node."""
@@ -68,6 +57,7 @@ class StudentQuizSetProgress(Base):
         UniqueConstraint('student_id', 'node_id', 'set_number', name='uq_student_node_quiz_set'),
     )
 
+
 class QuizAttempt(Base):
     __tablename__ = "quiz_attempts"
 
@@ -75,8 +65,10 @@ class QuizAttempt(Base):
     student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     node_id = Column(UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     set_number = Column(Integer, default=1, nullable=False)
+    score = Column(Float, nullable=True)  # Calculated score percentage stored upon submission
     score_percentage = Column(Float, nullable=False)  # e.g., 80.0
     is_passed = Column(Boolean, nullable=False)
     attempted_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     student = relationship("User", back_populates="quiz_attempts")
+    node = relationship("Node")

@@ -6,6 +6,53 @@ import { Network, ArrowLeft, CheckCircle2, Lock, Award, BookOpen, BarChart3, Arr
 import { api } from '@/src/lib/api';
 import { Suspense } from 'react';
 
+// Strict sequential progress and unlock enforcement helper
+function enforceSequentialProgress(list: any[]) {
+  const sorted = [...list].sort((a, b) => {
+    const aKey = String(a.node_key || a.node_title || a.title || '');
+    const bKey = String(b.node_key || b.node_title || b.title || '');
+    const aMatch = aKey.match(/\d+/);
+    const bMatch = bKey.match(/\d+/);
+    const aNum = aMatch ? parseInt(aMatch[0], 10) : null;
+    const bNum = bMatch ? parseInt(bMatch[0], 10) : null;
+    if (aNum !== null && bNum !== null && aNum !== bNum) return aNum - bNum;
+    return (a.order_index ?? a.position_y ?? 0) - (b.order_index ?? b.position_y ?? 0);
+  });
+
+  let allPrecedingCompleted = true;
+  return sorted.map((node) => {
+    let isCompleted = false;
+    let isUnlocked = false;
+    let progressPct = 0;
+    let passedSets = 0;
+
+    if (allPrecedingCompleted) {
+      isUnlocked = true;
+      passedSets = node.passed_sets_count || 0;
+      if (node.is_completed || passedSets >= 2 || (node.progress_percentage && node.progress_percentage >= 100)) {
+        isCompleted = true;
+        progressPct = 100;
+      } else {
+        progressPct = node.progress_percentage || (passedSets > 0 ? 50 : 0);
+        allPrecedingCompleted = false;
+      }
+    } else {
+      isCompleted = false;
+      isUnlocked = false;
+      progressPct = 0;
+      passedSets = 0;
+    }
+
+    return {
+      ...node,
+      is_completed: isCompleted,
+      is_unlocked: isUnlocked,
+      progress_percentage: progressPct,
+      passed_sets_count: passedSets,
+    };
+  });
+}
+
 function StudentProgressContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -45,14 +92,14 @@ function StudentProgressContent() {
       try {
         setLoading(true);
         const response = await api.get(`/quizzes/course/${courseId}/progress`);
-        setProgressData(response.data || []);
+        setProgressData(enforceSequentialProgress(response.data || []));
       } catch (err) {
         console.warn("Could not fetch live progress, using fallback mock progress data.");
-        setProgressData([
+        setProgressData(enforceSequentialProgress([
           { node_id: 'node-1', node_title: 'Python Fundamentals & Syntax', is_unlocked: true, is_completed: true, score_percentage: 100 },
           { node_id: 'node-2', node_title: 'Pandas & Data Wrangling', is_unlocked: true, is_completed: false, score_percentage: null },
           { node_id: 'node-3', node_title: 'Pipeline Automation & Scaling', is_unlocked: false, is_completed: false, score_percentage: null }
-        ]);
+        ]));
       } finally {
         setLoading(false);
       }
@@ -60,9 +107,9 @@ function StudentProgressContent() {
     fetchStudentProgress();
   }, [courseId]);
 
-  const completedCount = progressData.filter(p => p.is_completed).length;
-  const totalCount = progressData.length || 1;
-  const overallPercentage = progressData.length > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const totalNodes = progressData.length || 1;
+  const sumProgress = progressData.reduce((acc, p) => acc + (p.progress_percentage !== undefined && p.progress_percentage !== null ? p.progress_percentage : (p.is_completed ? 100 : 0)), 0);
+  const overallPercentage = progressData.length > 0 ? Math.round(sumProgress / totalNodes) : 0;
 
   return (
     <div className="min-h-screen bg-[#f4f7f4] text-[#1e2923] selection:bg-[#2e5a44] selection:text-white flex flex-col justify-between">
@@ -145,12 +192,37 @@ function StudentProgressContent() {
                     <div>
                       <h4 className="text-xs font-black text-[#112217]">{node.node_title || `Concept Module ${idx + 1}`}</h4>
                       <p className="text-[10px] text-[#4a6b5d]">
-                        {node.is_completed ? 'Assessment Passed & Completed' : node.is_unlocked ? 'Unlocked • Pending Assessment' : 'Locked • Complete Prerequisites'}
+                        {node.is_completed 
+                          ? 'Assessment Passed & Completed (100%)' 
+                          : (node.passed_sets_count || 0) > 0 
+                            ? `Quiz Set ${node.passed_sets_count} Cleared • Progress ${node.progress_percentage || 50}%` 
+                            : node.is_unlocked 
+                              ? 'Unlocked • Pending Assessment (0%)' 
+                              : 'Locked • Complete Prerequisites'}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-4 self-end sm:self-center">
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-2">
+                        <div className="w-20 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div 
+                            className="bg-[#2e5a44] h-1.5 rounded-full transition-all duration-300"
+                            style={{ width: `${node.progress_percentage !== undefined && node.progress_percentage !== null ? node.progress_percentage : (node.is_completed ? 100 : 0)}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-bold text-[#112217]">
+                          {node.progress_percentage !== undefined && node.progress_percentage !== null ? `${node.progress_percentage}%` : node.is_completed ? '100%' : '0%'}
+                        </span>
+                      </div>
+                      {node.passed_sets_count !== undefined && (
+                        <span className="text-[9px] text-[#4a6b5d] font-semibold">
+                          {node.passed_sets_count} / 2 Sets Passed
+                        </span>
+                      )}
+                    </div>
+
                     {node.score_percentage !== null && node.score_percentage !== undefined && (
                       <span className="text-xs font-bold px-3 py-1 bg-[#d3efdc]/50 text-[#112217] border border-[#bce8c9] rounded-xl">
                         Score: {node.score_percentage}%
@@ -159,7 +231,7 @@ function StudentProgressContent() {
                     <span className={`text-[10px] font-bold px-3 py-1 rounded-xl ${
                       node.is_completed ? 'bg-[#d3efdc] text-[#112217]' : node.is_unlocked ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-500'
                     }`}>
-                      {node.is_completed ? 'Completed' : node.is_unlocked ? 'Available' : 'Locked'}
+                      {node.is_completed ? 'Completed' : node.is_unlocked ? 'In Progress' : 'Locked'}
                     </span>
                   </div>
                 </div>

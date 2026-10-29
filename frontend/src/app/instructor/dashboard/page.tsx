@@ -15,6 +15,7 @@ import {
   FileText, 
   CheckCircle2, 
   Sparkles, 
+  Award, 
   Globe, 
   Lock, 
   Trash2, 
@@ -33,7 +34,9 @@ import {
   getInstructorDrafts, 
   getCategories, 
   publishCourse, 
-  createCourse 
+  createCourse, 
+  getInstructorReportsOverview, 
+  InstructorReportsOverview 
 } from '@/src/lib/api';
 
 export default function InstructorDashboard() {
@@ -50,6 +53,7 @@ export default function InstructorDashboard() {
   const [draftCourses, setDraftCourses] = useState<Course[]>([]);
   const [publishedCourses, setPublishedCourses] = useState<Course[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [reportsOverview, setReportsOverview] = useState<InstructorReportsOverview | null>(null);
   const [activeTab, setActiveTab] = useState<'drafts' | 'published'>('drafts');
 
   // Modal & Upload States
@@ -69,10 +73,11 @@ export default function InstructorDashboard() {
   // 1. Authentication Guard & Fetch Data
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [categoriesRes, draftsRes, publishedRes] = await Promise.allSettled([
+      const [categoriesRes, draftsRes, publishedRes, reportsRes] = await Promise.allSettled([
         getCategories(),
         getInstructorDrafts(),
-        api.get('/courses/published')
+        api.get('/courses/published'),
+        getInstructorReportsOverview()
       ]);
 
       const cats = categoriesRes.status === 'fulfilled' ? categoriesRes.value : [];
@@ -86,6 +91,10 @@ export default function InstructorDashboard() {
 
       const published = publishedRes.status === 'fulfilled' ? publishedRes.value.data || [] : [];
       setPublishedCourses(published);
+
+      if (reportsRes.status === 'fulfilled') {
+        setReportsOverview(reportsRes.value);
+      }
 
       setMetrics({
         activeUsers: '112',
@@ -362,6 +371,91 @@ export default function InstructorDashboard() {
               <span className="text-3xl font-black text-[#2e5a44]">{metrics.publishedCoursesCount}</span>
             </div>
 
+          </div>
+
+          {/* Instructor Highlights: Popular Course & Most Completed Course */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Popular Course */}
+            <div className="bg-white border border-[#e2eae4] rounded-[28px] p-6 shadow-sm flex flex-col justify-between space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-[#d3efdc] text-[#2e5a44] flex items-center justify-center font-bold shadow-sm">
+                    <TrendingUp size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#2e5a44]">
+                      Instructor Top Enrolled
+                    </span>
+                    <h4 className="text-sm font-black text-[#112217]">Most Popular Course</h4>
+                  </div>
+                </div>
+                {reportsOverview?.popular_course && (
+                  <span className="px-3 py-1 rounded-xl text-xs font-black bg-[#d3efdc] text-[#112217]">
+                    {reportsOverview.popular_course.total_enrollments} Learners
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-base font-black text-[#112217]">
+                  {reportsOverview?.popular_course?.title || "No enrolled courses recorded yet"}
+                </h3>
+                <p className="text-xs text-[#4a6b5d] mt-0.5">
+                  Highest learner acquisition across your published curriculum offerings.
+                </p>
+              </div>
+
+              {reportsOverview?.popular_course && (
+                <button
+                  onClick={() => router.push(`/instructor/course/${reportsOverview.popular_course?.id}/analytics`)}
+                  className="w-fit text-xs font-bold text-[#2e5a44] hover:text-[#112217] flex items-center gap-1.5 cursor-pointer hover:underline"
+                >
+                  <span>View Detailed Student Analytics & Reports</span>
+                  <ArrowRight size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Most Completed Course */}
+            <div className="bg-white border border-[#e2eae4] rounded-[28px] p-6 shadow-sm flex flex-col justify-between space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-[#112217] text-white flex items-center justify-center font-bold shadow-sm">
+                    <Award size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#4a6b5d]">
+                      Instructor Top Completion
+                    </span>
+                    <h4 className="text-sm font-black text-[#112217]">Most Completed Course</h4>
+                  </div>
+                </div>
+                {reportsOverview?.most_completed_course && (
+                  <span className="px-3 py-1 rounded-xl text-xs font-black bg-[#112217] text-white">
+                    {reportsOverview.most_completed_course.completed_students_count} Graduates ({reportsOverview.most_completed_course.completion_rate}%)
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-base font-black text-[#112217]">
+                  {reportsOverview?.most_completed_course?.title || "No completed courses yet"}
+                </h3>
+                <p className="text-xs text-[#4a6b5d] mt-0.5">
+                  Highest 100% course clearance rate and verified certificate issuance.
+                </p>
+              </div>
+
+              {reportsOverview?.most_completed_course && (
+                <button
+                  onClick={() => router.push(`/instructor/course/${reportsOverview.most_completed_course?.id}/analytics`)}
+                  className="w-fit text-xs font-bold text-[#2e5a44] hover:text-[#112217] flex items-center gap-1.5 cursor-pointer hover:underline"
+                >
+                  <span>View Detailed Student Analytics & Reports</span>
+                  <ArrowRight size={14} />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Drafts vs Published Course Management Tabs */}
